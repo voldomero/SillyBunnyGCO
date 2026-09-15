@@ -1,0 +1,63 @@
+<div class="example-extension-settings sbu-group-utils-settings">
+    <div class="inline-drawer">
+        <button type="button" class="inline-drawer-toggle inline-drawer-header" aria-expanded="false" aria-controls="sbu-group-settings-content">
+            <b>Group Utils</b>
+            <span class="inline-drawer-icon fa-solid fa-circle-chevron-down down" aria-hidden="true"></span>
+        </button>
+        <div class="inline-drawer-content" id="sbu-group-settings-content">
+
+            <button type="button" id="sbu-open-members" class="menu_button" disabled>Group Members</button>
+            <div class="example-extension_block flex-container">
+                <input id="sbu_bottom_bar_shortcut" type="checkbox" />
+                <label for="sbu_bottom_bar_shortcut">Show Group Members in the bottom bar</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input id="share_group_notes" type="checkbox" />
+                <label for="share_group_notes">Share group notes</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input id="sbu_responder_picker" type="checkbox" />
+                <label for="sbu_responder_picker">Show compact responder picker</label>
+            </div>
+            <div id="sbu-reply-rules-settings"></div>
+            <div class="example-extension_block flex-container">
+                <input id="sbu_prose_styles" type="checkbox" />
+                <label for="sbu_prose_styles">Style existing quotes and action emphasis in group chats</label>
+            </div>
+            <p>Uses the host's existing formatting. Ordinary prose and stored messages stay unchanged.</p>
+            <div id="sbu-scene-suggestions-settings"></div>
+
+            <div class="example-extension_block flex-container">
+                <input id="share_character_info" type="checkbox" />
+                <label for="share_character_info">Share character descriptions and height context</label>
+            </div>
+            <p>Notes can be shared independently. Open Group Members to preview the context added for the active conversation.</p>
+            <div class="example-extension_block flex-container">
+                <input id="include_worldinfo" type="checkbox" />
+                <label for="include_worldinfo">Include In WI</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input style="background: none;" id="text_depth" type="number" value="4" min="0" placeholder="4"/>
+                <label for="text_depth" >Depth</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input style="background: none;" id="share_stopper" type="text" value="." maxlength="1"  placeholder="."/>
+                <label for="share_stopper" title="What character does the share stop at?">Share Stopper</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input style="background: none;" id="max_share_length" type="number" value="200" min="1" placeholder="200"/>
+                <label for="max_share_length" title="How many of the character's tokens are shared?">Max Shared Tokens</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <input style="background: none;" id="max_characters" type="number" value="-1" placeholder="-1 means all characters exposed"/>
+                <label for="max_characters" title="Maximum additional descriptions; -1 means all. Notes are unaffected.">Max descriptions shared</label>
+            </div>
+            <div class="example-extension_block flex-container">
+                <label>The following Macros have been added:</label><br>
+                <span>{{char_list}}: Names of available members with descriptions, excluding the current speaker</span>
+                <span>{{char_list_all}}: Names of available members with descriptions, including the current speaker</span>
+            </div>
+            <hr class="sysHR" />
+        </div>
+    </div>
+</div>
