@@ -1,0 +1,10 @@
+{
+    "name": "sillybunny-gco-tests",
+    "private": true,
+    "type": "module",
+    "scripts": {
+        "test": "node --test tests/*.test.mjs",
+        "test:browser": "node tests/browser.mjs",
+        "test:live": "node tests/live-host.mjs"
+    }
+}

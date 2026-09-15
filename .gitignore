@@ -1,0 +1,4 @@
+tests/artifacts/
+node_modules/
+.env
+.env.*

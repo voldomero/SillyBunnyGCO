@@ -1,0 +1,13 @@
+{
+    "display_name": "SillyBunny Group Chat Overhaul",
+    "loading_order": 1,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "generate_interceptor": "groupUtils_generationInterceptor",
+    "author": "aracnai",
+    "version": "1.8",
+    "homePage": "https://github.com/voldomero/SillyBunnyGCO",
+    "auto_update": false
+}

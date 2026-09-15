@@ -1,0 +1,47 @@
+.sbu-responder-compact,
+.sbu-reply-rules-body {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+    max-width: 100%;
+    padding: 8px;
+}
+#sbu-responder-compact {
+    width: 100%;
+    flex-basis: 100%;
+    grid-column: 1 / -1;
+    order: 26;
+    font-size: var(--mainFontSize, 16px);
+    white-space: normal;
+}
+.sbu-responder-compact[hidden] { display: none !important; }
+.sbu-responder-actions, .sbu-rule-phrase { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.sbu-responder-compact select, .sbu-reply-rules select, .sbu-reply-rules input,
+.sbu-reply-rules textarea { min-width: 0; max-width: 100%; box-sizing: border-box; }
+.sbu-reply-rules textarea, .sbu-reply-rules select { width: 100%; }
+.sbu-rule-phrase input { flex: 1 1 120px; width: 120px; }
+.sbu-rule-field { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; }
+.sbu-rule-field input[type="number"] { width: 65px; flex-shrink: 0; }
+.sbu-reply-rules fieldset { min-width: 0; margin: 6px 0; border: 1px solid var(--SmartThemeBorderColor, #888); }
+/* Native menu buttons use min-content width; text controls must retain whole words. */
+#sbu-responder-compact button, .sbu-reply-rules button {
+    width: auto;
+    max-width: 100%;
+    height: auto;
+    flex: 0 1 auto;
+    white-space: normal;
+    overflow-wrap: normal;
+    word-break: normal;
+}
+.sbu-responder-status, .sbu-responder-hint { font-size: .9em; margin: 0; overflow-wrap: anywhere; }
+.sbu-rule-preview { padding-inline-start: 20px; overflow-wrap: anywhere; }
+#sbu-suggestion-list { padding-inline-start: 20px; overflow-wrap: anywhere; }
+#sbu-suggestion-list button { overflow-wrap: anywhere; }
+.sbu-responder-compact :focus-visible, .sbu-reply-rules :focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+@media (pointer: coarse) {
+    .sbu-responder-compact button, .sbu-responder-compact select,
+    .sbu-reply-rules button, .sbu-reply-rules select, .sbu-reply-rules input:not([type="checkbox"]),
+    .sbu-reply-rules summary, .sbu-rule-field { min-height: 44px; }
+}
