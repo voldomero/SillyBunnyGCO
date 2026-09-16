@@ -114,6 +114,7 @@ export async function initializeBundle() {
         await loadBundledModule('group-greetings', () => import(assetUrl('./vendor/group-greetings/dist/index.js')));
         await loadBundledModule('group-utils', () => import(assetUrl('./groupUtils.js')));
         await loadBundledModule('group-send-as', () => import(assetUrl('./groupSendAs.js')));
+        await loadBundledModule('current-members-popout', () => import(assetUrl('./src/current-members-popout.js')));
         await loadBundledModule('members-panel', async () => ({ initialize: initializeMembersPanel }));
         if (!bundleState.bundleDisabled) document.body.classList.add('sbu-group-utilities-loaded');
     })();

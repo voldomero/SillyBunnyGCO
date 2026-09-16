@@ -1,3 +1,205 @@
+/* Enhance only the native popout; the editor keeps its own header and filters. */
+#groupMemberListPopout.sbu-current-members-popout {
+    --sbu-popout-control-size: 32px;
+    border-radius: var(--sb-radius-sm, 10px);
+}
+
+.sbu-current-members-frame {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .panelControlBar {
+    position: static;
+    flex: 0 0 auto;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+.sbu-current-members-title {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font: inherit;
+    font-weight: 600;
+    text-align: left;
+    overflow-wrap: anywhere;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .drag-grabber {
+    position: static;
+    margin: 0;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #groupMemberListPopoutClose {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    min-height: var(--sbu-popout-control-size);
+    height: auto;
+    aspect-ratio: auto;
+    padding: 4px 10px;
+    opacity: 1;
+    font: inherit;
+    cursor: pointer;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #groupMemberListPopoutClose::before {
+    display: none;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #currentGroupMembers {
+    flex: 1;
+    min-height: 0;
+    height: auto;
+    gap: 8px;
+    padding: 10px;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #rm_group_members_header,
+#groupMemberListPopout.sbu-current-members-popout .rm_tag_controls,
+#groupMemberListPopout.sbu-current-members-popout .group_pagination {
+    flex: 0 0 auto;
+    min-width: 0;
+    margin: 0;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #rm_group_members_filter {
+    width: 100%;
+    min-width: 0;
+    min-height: var(--sbu-popout-control-size);
+    margin: 0;
+    padding: 6px 10px;
+}
+
+#groupMemberListPopout.sbu-current-members-popout :is(#groupMemberListPopoutClose, #rm_group_members_filter, .paginationjs-pages a, .paginationjs-size-changer select) {
+    color: var(--SmartThemeBodyColor);
+    background: var(--SmartThemeChatTintColor);
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: var(--sb-radius-sm, 10px);
+    box-shadow: none;
+    text-shadow: none;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .rm_tag_filter {
+    gap: 6px;
+    align-items: center;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .tag.actionable {
+    min-width: var(--sbu-popout-control-size);
+    min-height: var(--sbu-popout-control-size);
+    padding: 4px 8px;
+    aspect-ratio: auto;
+    border-style: solid;
+    border-width: 1px;
+    border-radius: var(--sb-radius-sm, 10px);
+    background: var(--SmartThemeChatTintColor) !important;
+    opacity: 1;
+    filter: none;
+    font-size: 0.95em;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .tag.actionable:not(.excluded) {
+    border-color: var(--SmartThemeBorderColor);
+}
+
+#groupMemberListPopout.sbu-current-members-popout .tag.actionable.selected {
+    color: var(--SmartThemeQuoteColor);
+    border-color: var(--SmartThemeQuoteColor);
+    background: color-mix(in srgb, var(--SmartThemeQuoteColor) 15%, var(--SmartThemeChatTintColor)) !important;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs {
+    width: 100%;
+    min-width: 0;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.85em;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs-nav {
+    margin: 0 auto 0 0;
+    line-height: 1.4;
+    font-weight: normal;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs-pages ul {
+    gap: 4px;
+    margin: 0;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs-pages a {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 28px;
+    min-height: var(--sbu-popout-control-size);
+    padding: 0 4px;
+    line-height: 1;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs-size-changer select {
+    width: auto;
+    max-width: 100%;
+    min-height: var(--sbu-popout-control-size);
+    margin: 0;
+    padding: 4px 8px;
+    font: inherit;
+}
+
+#groupMemberListPopout.sbu-current-members-popout :is(#groupMemberListPopoutClose:hover, .tag.actionable:not(.selected):not(.excluded):hover, .paginationjs-pages li:not(.disabled) a:hover) {
+    background: var(--SmartThemeBorderColor) !important;
+    filter: none;
+}
+
+#groupMemberListPopout.sbu-current-members-popout :is([role='button'], input, select, .tag, .paginationjs-pages a):focus-visible {
+    outline: 2px solid var(--sb-focus-ring, currentColor);
+    outline-offset: 2px;
+}
+
+#groupMemberListPopout.sbu-current-members-popout .paginationjs-pages li.disabled a {
+    opacity: 0.45;
+    cursor: default;
+}
+
+#groupMemberListPopout.sbu-current-members-popout #rm_group_members {
+    flex: 1 1 auto;
+    min-height: 96px;
+    margin: 0;
+    padding: 0;
+    align-content: flex-start;
+    overscroll-behavior: contain;
+}
+
+@media (pointer: coarse), (max-width: 1000px) {
+    #groupMemberListPopout.sbu-current-members-popout {
+        --sbu-popout-control-size: var(--sb-mobile-touch-target, 44px);
+    }
+
+    #groupMemberListPopout.sbu-current-members-popout :is(#groupMemberListPopoutClose, .paginationjs-pages a) {
+        min-width: var(--sbu-popout-control-size);
+    }
+}
+
+@media (max-width: 768px) {
+    #groupMemberListPopout.sbu-current-members-popout {
+        /* Native mobile popouts use intrinsic height; bound this frame so its list can scroll. */
+        height: calc(100dvh - var(--topBarBlockSize, 40px));
+    }
+}
+
 /* Keep compaction local to the existing member rows and native panel. */
 #rm_group_members {
     container-type: inline-size;
