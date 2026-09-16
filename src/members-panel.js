@@ -30,7 +30,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     grip.setAttribute('aria-hidden', 'true');
     const reset = button('Reset position', () => shell.reset(), 'sbu-members-reset');
     const closeButton = button('Close', () => close(), 'sbu-members-close');
-    header.append(title, grip, reset, closeButton);
+    header.append(title, grip, closeButton);
     const content = element('div', 'sbu-members-content');
     const conversationLabel = element('p', 'sbu-members-conversation');
     const empty = element('p', 'sbu-members-empty', 'Open a group conversation to see its members.');
@@ -40,6 +40,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     list.setAttribute('aria-label', 'Members in this conversation');
     const detail = element('section', 'sbu-members-detail');
     const memberTitle = element('h3');
+    memberTitle.tabIndex = -1;
     const availability = element('p', 'sbu-members-availability');
     const actions = element('div', 'sbu-members-actions');
     const writeButton = button('Write as', () => runAction('write'), 'sbu-members-write');
@@ -47,6 +48,8 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     actions.append(writeButton, respondButton);
     const actionStatus = element('p', 'sbu-members-status');
     actionStatus.setAttribute('role', 'status');
+    const notes = element('details', 'sbu-members-notes');
+    const notesSummary = element('summary', 'sbu-members-notes-summary', 'Shared note');
     const noteLabel = element('label', '', 'Shared note');
     noteLabel.htmlFor = 'sbu-members-note';
     const note = element('textarea', 'text_pole sbu-members-note');
@@ -64,7 +67,8 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     legacy.append(legacySummary, legacyText, recoverLegacy);
     const noteStatus = element('p', 'sbu-members-status');
     noteStatus.setAttribute('role', 'status');
-    detail.append(memberTitle, availability, actions, actionStatus, noteLabel, note, noteHint, legacy, noteStatus);
+    notes.append(notesSummary, noteLabel, note, noteHint, legacy, noteStatus);
+    detail.append(memberTitle, availability, actions, actionStatus, notes);
     const preview = element('details', 'sbu-members-preview');
     const previewSummary = element('summary', '', 'Context preview');
     const previewStatus = element('p', 'sbu-members-status');
@@ -74,7 +78,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const previewWarnings = element('ul', 'sbu-members-preview-warnings');
     const refreshPreview = button('Refresh preview', () => renderPreview());
     preview.append(previewSummary, previewSpeaker, previewStatus, previewText, previewWarnings, refreshPreview);
-    content.append(conversationLabel, empty, missing, list, detail, preview);
+    content.append(conversationLabel, empty, missing, list, detail, preview, reset);
     panel.append(header, content);
 
     let shell;
@@ -146,7 +150,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
             const choice = button('', () => {
                 selectedAvatar = member.avatar;
                 refresh();
-                note.focus({ preventScroll: true });
+                (notes.open && !note.disabled ? note : memberTitle).focus({ preventScroll: true });
             }, 'sbu-members-choice');
             choice.dataset.avatar = member.avatar;
             choice.setAttribute('aria-pressed', String(member.avatar === selectedAvatar));
@@ -277,7 +281,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
             event.preventDefault();
             event.stopPropagation();
             close();
-        } else if (event.key === 'Enter' && event.target.closest('button, input, select, textarea')) {
+        } else if (event.key === 'Enter' && event.target.closest('button, input, select, textarea, summary')) {
             event.stopPropagation();
         }
     }
