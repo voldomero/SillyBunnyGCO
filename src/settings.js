@@ -8,6 +8,7 @@ export const defaults = Object.freeze({
     share_character_info: true,
     share_notes: true,
     bottom_bar_shortcut: false,
+    current_members_shortcut: true,
     responder_picker: false,
     reply_rules: null,
     scene_controls: false,

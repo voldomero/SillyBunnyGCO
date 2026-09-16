@@ -22,7 +22,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     panel.setAttribute('aria-modal', 'false');
     panel.setAttribute('aria-labelledby', 'sbu-members-title');
     const header = element('header', 'sbu-members-header');
-    const title = element('h2', '', 'Group Members');
+    const title = element('h2', '', 'Group Dynamics');
     title.id = 'sbu-members-title';
     title.tabIndex = -1;
     const grip = element('span', 'drag-grabber sbu-members-grip', '⋮⋮');
@@ -229,7 +229,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         if (enabled === shortcutEnabled) return;
         shortcutCleanup?.();
         shortcutCleanup = undefined;
-        if (enabled) shortcutCleanup = host.registerShortcut({ id: 'sbu-members-shortcut', label: 'Group Members', onClick: toggle });
+        if (enabled) shortcutCleanup = host.registerShortcut({ id: 'sbu-members-shortcut', label: 'Group Dynamics', onClick: toggle });
         shortcutEnabled = enabled;
         updateTriggers();
     }
@@ -332,7 +332,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         }
         shell = host.attachPanel(panel);
         document.addEventListener('keydown', onKeyDown, true);
-        cleanups.push(host.registerAction({ id: 'sbu-members-action', label: 'Group Members', onClick: toggle }));
+        cleanups.push(host.registerAction({ id: 'sbu-members-action', label: 'Group Dynamics', onClick: toggle }));
         cleanups.push(host.onContextChanged(refresh));
         cleanups.push(settings.subscribe(refresh));
         updateTriggers();

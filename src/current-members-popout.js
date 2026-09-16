@@ -1,9 +1,52 @@
 let activeCleanup;
 
-export function initialize() {
+export function initialize({ host, settings } = globalThis.SillyBunnyGroupUtilities?.groupUtilsApi ?? {}) {
     if (activeCleanup) return activeCleanup;
     const records = new Map();
     let observer;
+    let shortcut;
+    let unsubscribeSettings;
+    let unsubscribeContext;
+    let destroyed = false;
+    let pending = false;
+    let requestVersion = 0;
+
+    function refreshShortcut() {
+        if (!host || !settings || destroyed) return;
+        if (!settings.get().current_members_shortcut) {
+            requestVersion++;
+            shortcut?.();
+            shortcut = undefined;
+            return;
+        }
+        shortcut ??= host.registerShortcut({
+            id: 'sbu-current-members-shortcut', label: 'Current Members', icon: 'fa-address-book', onClick: toggle,
+        });
+        const availability = host.canOpenCurrentMembers();
+        shortcut.element.disabled = pending || !availability.allowed;
+        shortcut.element.title = availability.reason || 'Current Members';
+        shortcut.element.setAttribute('aria-controls', 'groupMemberListPopout');
+        shortcut.element.setAttribute('aria-expanded', String(host.isCurrentMembersOpen()));
+    }
+
+    async function toggle() {
+        if (pending || destroyed) return;
+        const version = ++requestVersion;
+        pending = true;
+        refreshShortcut();
+        try {
+            const result = await host.toggleCurrentMembers({ isCancelled: () => destroyed || version !== requestVersion });
+            if (!destroyed && version === requestVersion && result?.ok === false && result.reason) globalThis.toastr?.warning(result.reason);
+        } catch (error) {
+            if (!destroyed && version === requestVersion) {
+                console.warn('[Group Utilities] Current Members could not open', error);
+                globalThis.toastr?.warning('Could not open Current Members. Try again or open it from the group editor.');
+            }
+        } finally {
+            pending = false;
+            refreshShortcut();
+        }
+    }
 
     function enhance(popout) {
         if (records.has(popout)) return;
@@ -55,10 +98,16 @@ export function initialize() {
             records.delete(popout);
         }
         document.querySelectorAll('#groupMemberListPopout').forEach(enhance);
+        refreshShortcut();
     }
 
     const cleanup = () => {
+        destroyed = true;
+        requestVersion++;
         observer?.disconnect();
+        unsubscribeSettings?.();
+        unsubscribeContext?.();
+        shortcut?.();
         for (const restore of records.values()) restore();
         records.clear();
         if (activeCleanup === cleanup) activeCleanup = undefined;
@@ -66,11 +115,18 @@ export function initialize() {
     try {
         refresh();
         observer = new MutationObserver(changes => {
-            if (changes.some(change => change.target instanceof Element && change.target.closest('#groupMemberListPopout')
+            if (changes.some(change => change.attributeName === 'data-menu-type'
+                || change.target instanceof Element && change.target.closest('#groupMemberListPopout')
                 || [...change.addedNodes, ...change.removedNodes].some(node => node instanceof Element
                     && (node.matches('#groupMemberListPopout') || node.querySelector('#groupMemberListPopout'))))) refresh();
         });
         observer.observe(document.getElementById('movingDivs') ?? document.body, { childList: true, subtree: true });
+        const editorPanel = document.getElementById('right-nav-panel');
+        if (editorPanel) observer.observe(editorPanel, { attributes: true, attributeFilter: ['data-menu-type'] });
+        if (host && settings) {
+            unsubscribeSettings = settings.subscribe(refreshShortcut);
+            unsubscribeContext = host.onContextChanged(refreshShortcut);
+        }
         activeCleanup = cleanup;
         return cleanup;
     } catch (error) {

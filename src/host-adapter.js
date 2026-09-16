@@ -76,6 +76,7 @@ export function createHostAdapter({
     let generationPending = false;
     let nativeModules;
     let nativeGenerating;
+    let groupEditorModule;
     const context = () => getContext() ?? {};
     const view = documentObject?.defaultView ?? globalThis.window;
     const isMobileLayout = () => Boolean(context().isMobile?.()
@@ -166,7 +167,7 @@ export function createHostAdapter({
         };
     }
 
-    function registerButton({ id, label, onClick }, selector, shortcut) {
+    function registerButton({ id, label, onClick, icon = 'fa-users' }, selector, shortcut) {
         const parent = documentObject?.querySelector(selector);
         if (!documentObject || (!parent && !shortcut)) throw new Error(`Group Members entry point unavailable: ${selector}`);
         if (documentObject.getElementById(id)) throw new Error(`Group Members entry point already exists: ${id}`);
@@ -174,7 +175,7 @@ export function createHostAdapter({
         button.type = 'button';
         button.id = id;
         button.className = shortcut
-            ? 'sbu-members-shortcut gg-action-button menu_button menu_button_icon fa-solid fa-users'
+            ? `sbu-members-shortcut gg-action-button menu_button menu_button_icon fa-solid ${icon}`
             : 'sbu-members-action menu_button';
         if (!shortcut) button.textContent = label;
         button.title = label;
@@ -201,6 +202,56 @@ export function createHostAdapter({
         };
         cleanup.element = button;
         return cleanup;
+    }
+
+    function isCurrentMembersOpen() {
+        return Boolean(documentObject?.getElementById('groupMemberListPopout'));
+    }
+
+    function canOpenCurrentMembers() {
+        if (isCurrentMembersOpen()) return jQuery && documentObject?.getElementById('groupMemberListPopoutClose')
+            ? { allowed: true } : { allowed: false, reason: 'Current Members is unavailable in this host.' };
+        if (!getActiveConversation(context())) return { allowed: false, reason: 'Open a group conversation to use Current Members.' };
+        if (['create', 'group_create'].includes(context().menuType)) {
+            return { allowed: false, reason: 'Finish or leave the new character or group editor before opening Current Members.' };
+        }
+        if (!jQuery || !documentObject?.getElementById('groupCurrentMemberPopoutButton')) {
+            return { allowed: false, reason: 'Current Members is unavailable in this host.' };
+        }
+        return { allowed: true };
+    }
+
+    async function toggleCurrentMembers({ isCancelled = () => false } = {}) {
+        if (isCancelled()) return { ok: false };
+        const close = documentObject?.getElementById('groupMemberListPopoutClose');
+        if (isCurrentMembersOpen() && close && jQuery) {
+            jQuery(close).triggerHandler('click');
+            return { ok: true };
+        }
+        const availability = canOpenCurrentMembers();
+        if (!availability.allowed) return { ok: false, reason: availability.reason };
+        const active = getActiveConversation(context());
+        if (!active) return { ok: false };
+        groupEditorModule ??= importModule(getHostModuleUrl('group-chats.js')).catch(error => {
+            groupEditorModule = undefined;
+            throw error;
+        });
+        const editor = await groupEditorModule;
+        if (isCancelled() || getActiveConversation(context())?.key !== active.key) return { ok: false };
+        const latestAvailability = canOpenCurrentMembers();
+        if (!latestAvailability.allowed) return { ok: false, reason: latestAvailability.reason };
+        if (isCurrentMembersOpen()) return { ok: true };
+        if (typeof editor.select_group_chats !== 'function') {
+            return { ok: false, reason: 'Current Members is unavailable in this host.' };
+        }
+        // Prepare the native editor without navigating the chat or changing the composer draft.
+        if (String(editor.openGroupId) !== String(active.group.id)) editor.select_group_chats(active.group.id, true);
+        if (isCancelled() || getActiveConversation(context())?.key !== active.key) return { ok: false };
+        const opener = documentObject.getElementById('groupCurrentMemberPopoutButton');
+        if (!opener) return { ok: false, reason: 'Current Members is unavailable in this host.' };
+        // The hidden mobile opener still has its handler; avoid toggling the enclosing drawer.
+        jQuery(opener).triggerHandler('click');
+        return { ok: isCurrentMembersOpen() };
     }
 
     async function getNativeModules() {
@@ -364,6 +415,9 @@ export function createHostAdapter({
         routingCapabilities,
         registerAction: options => registerButton(options, '#extensionsMenu', false),
         registerShortcut: options => registerButton(options, '#gg-action-button-container .gg-regular-buttons-container', true),
+        isCurrentMembersOpen,
+        canOpenCurrentMembers,
+        toggleCurrentMembers,
         attachPanel,
         canAskToRespond,
         askToRespond,
