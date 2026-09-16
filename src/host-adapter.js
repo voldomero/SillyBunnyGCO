@@ -168,21 +168,33 @@ export function createHostAdapter({
 
     function registerButton({ id, label, onClick }, selector, shortcut) {
         const parent = documentObject?.querySelector(selector);
-        if (!parent) throw new Error(`Group Members entry point unavailable: ${selector}`);
+        if (!documentObject || (!parent && !shortcut)) throw new Error(`Group Members entry point unavailable: ${selector}`);
         if (documentObject.getElementById(id)) throw new Error(`Group Members entry point already exists: ${id}`);
         const button = documentObject.createElement('button');
         button.type = 'button';
         button.id = id;
-        button.className = shortcut ? 'sbu-members-shortcut' : 'sbu-members-action menu_button';
-        button.textContent = label;
+        button.className = shortcut
+            ? 'sbu-members-shortcut gg-action-button menu_button menu_button_icon fa-solid fa-users'
+            : 'sbu-members-action menu_button';
+        if (!shortcut) button.textContent = label;
         button.title = label;
         button.setAttribute('aria-label', label);
         button.setAttribute('aria-expanded', 'false');
         button.addEventListener('click', onClick);
         const keyboard = event => { if (event.key === 'Enter') event.stopPropagation(); };
         button.addEventListener('keydown', keyboard);
-        parent.append(button);
+        parent?.append(button);
+        let placementObserver;
+        if (shortcut && view?.MutationObserver) {
+            // Guided Generations rebuilds its action row; retain our button and its listeners.
+            placementObserver = new view.MutationObserver(() => {
+                const target = documentObject.querySelector(selector);
+                if (target && button.parentElement !== target) target.append(button);
+            });
+            placementObserver.observe(documentObject.getElementById('send_form') ?? documentObject.body, { childList: true, subtree: true });
+        }
         const cleanup = () => {
+            placementObserver?.disconnect();
             button.removeEventListener('click', onClick);
             button.removeEventListener('keydown', keyboard);
             button.remove();
@@ -351,7 +363,7 @@ export function createHostAdapter({
         onTurnEvent,
         routingCapabilities,
         registerAction: options => registerButton(options, '#extensionsMenu', false),
-        registerShortcut: options => registerButton(options, '#leftSendForm', true),
+        registerShortcut: options => registerButton(options, '#gg-action-button-container .gg-regular-buttons-container', true),
         attachPanel,
         canAskToRespond,
         askToRespond,

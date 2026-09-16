@@ -227,8 +227,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     }
 
     function updateTriggers() {
-        for (const id of ['sbu-members-action', 'sbu-members-shortcut']) {
-            const trigger = document.getElementById(id);
+        for (const trigger of [document.getElementById('sbu-members-action'), shortcutCleanup?.element ?? document.getElementById('sbu-members-shortcut')]) {
             trigger?.setAttribute('aria-expanded', String(opened));
             trigger?.setAttribute('aria-controls', panel.id);
         }
