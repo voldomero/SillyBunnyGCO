@@ -226,6 +226,7 @@ export async function initialize() {
                 share_character_info: ['share_character_info', 'checkbox'],
                 share_group_notes: ['share_notes', 'checkbox'],
                 sbu_bottom_bar_shortcut: ['bottom_bar_shortcut', 'checkbox'],
+                sbu_current_members_shortcut: ['current_members_shortcut', 'checkbox'],
                 sbu_responder_picker: ['responder_picker', 'checkbox'],
                 sbu_prose_styles: ['prose_styles', 'checkbox'],
                 include_worldinfo: ['include_wi', 'checkbox'],
