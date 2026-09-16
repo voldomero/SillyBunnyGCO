@@ -35,9 +35,12 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const conversationLabel = element('p', 'sbu-members-conversation');
     const empty = element('p', 'sbu-members-empty', 'Open a group conversation to see its members.');
     const missing = element('p', 'sbu-members-hint');
+    const roster = element('details', 'sbu-members-roster');
+    const rosterSummary = element('summary', 'sbu-members-roster-summary', 'Group members');
     const list = element('div', 'sbu-members-list');
     list.setAttribute('role', 'group');
     list.setAttribute('aria-label', 'Members in this conversation');
+    roster.append(rosterSummary, list);
     const detail = element('section', 'sbu-members-detail');
     const memberTitle = element('h3');
     memberTitle.tabIndex = -1;
@@ -78,7 +81,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const previewWarnings = element('ul', 'sbu-members-preview-warnings');
     const refreshPreview = button('Refresh preview', () => renderPreview());
     preview.append(previewSummary, previewSpeaker, previewStatus, previewText, previewWarnings, refreshPreview);
-    content.append(conversationLabel, empty, missing, list, detail, preview, reset);
+    content.append(conversationLabel, empty, missing, roster, detail, preview, reset);
     panel.append(header, content);
 
     let shell;
@@ -142,7 +145,8 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         empty.textContent = conversation.group ? 'This group has no available character cards.' : 'Open a group conversation to see its members.';
         missing.textContent = (conversation.group?.members?.length ?? 0) > members.length
             ? 'Some group members could not be resolved to a single character card.' : '';
-        list.hidden = !members.length;
+        roster.hidden = !members.length;
+        rosterSummary.textContent = `Group members (${members.length})`;
         detail.hidden = !selected;
         preview.hidden = !conversation.group;
         list.replaceChildren();
