@@ -116,8 +116,7 @@
     outline-offset: 2px;
 }
 
-.sbu-members-action,
-.sbu-members-shortcut {
+.sbu-members-action {
     font: inherit;
     color: var(--SmartThemeBodyColor, inherit);
     background: transparent;
@@ -129,8 +128,7 @@
     white-space: normal;
 }
 
-.sbu-members-action:focus-visible,
-.sbu-members-shortcut:focus-visible {
+.sbu-members-action:focus-visible {
     outline: 2px solid var(--sb-focus-ring, currentColor);
     outline-offset: 2px;
 }
@@ -224,8 +222,7 @@
 @media (pointer: coarse) {
     .sbu-members-panel .sbu-members-button,
     .sbu-members-panel summary,
-    .sbu-members-action,
-    .sbu-members-shortcut {
+    .sbu-members-action {
         min-height: 44px;
         min-width: 44px;
     }
