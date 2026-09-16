@@ -1,18 +1,18 @@
 .sbu-native-panel.draggable {
-    display: block;
+    display: flex;
+    flex-direction: column;
     position: fixed;
     top: 64px;
     right: 12px;
     bottom: auto;
     left: auto;
-    width: min(440px, calc(100vw - 24px));
-    height: min(680px, calc(100vh - 88px));
-    height: min(680px, calc(100dvh - 88px));
+    width: min(320px, calc(100vw - 24px));
+    height: auto;
     min-width: 280px;
     min-height: 240px;
     max-width: calc(100vw - 24px);
-    max-height: calc(100vh - 88px);
-    max-height: calc(100dvh - 88px);
+    max-height: min(500px, calc(100vh - 88px));
+    max-height: min(500px, calc(100dvh - 88px));
     padding: 0;
     overflow: hidden;
     z-index: var(--sb-z-shell-sidebar, 1200);
@@ -30,7 +30,7 @@
 .sbu-members-panel {
     display: flex;
     flex-direction: column;
-    height: 100%;
+    flex: 1 1 auto;
     min-height: 0;
     min-width: 0;
     font-size: var(--mainFontSize, 16px);
@@ -39,10 +39,11 @@
 
 .sbu-members-header {
     display: flex;
+    flex-shrink: 0;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    padding: 10px 12px;
+    gap: 6px;
+    padding: 8px 10px;
     border-bottom: 1px solid var(--SmartThemeBorderColor, currentColor);
 }
 
@@ -62,16 +63,16 @@
 }
 
 .sbu-members-content {
-    flex: 1;
+    flex: 1 1 auto;
     min-height: 0;
     overflow: auto;
     overscroll-behavior: contain;
-    padding: 12px;
+    padding: 10px;
     scrollbar-gutter: stable;
 }
 
 .sbu-members-content p {
-    margin: 0 0 10px;
+    margin: 0 0 8px;
     overflow-wrap: anywhere;
 }
 
@@ -83,7 +84,7 @@
     display: flex;
     flex-direction: column;
     gap: 4px;
-    margin-bottom: 16px;
+    margin-bottom: 10px;
 }
 
 .sbu-members-panel .sbu-members-button {
@@ -93,7 +94,7 @@
     border: 1px solid var(--SmartThemeBorderColor, currentColor);
     border-radius: 8px;
     min-height: 32px;
-    padding: 6px 10px;
+    padding: 4px 8px;
     cursor: pointer;
     max-width: 100%;
     white-space: normal;
@@ -137,7 +138,7 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    gap: 4px;
+    gap: 2px;
     width: 100%;
     text-align: left;
 }
@@ -168,8 +169,8 @@
 .sbu-members-actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
-    margin: 8px 0 12px;
+    gap: 6px;
+    margin: 6px 0 8px;
 }
 
 .sbu-members-detail label {
@@ -195,7 +196,16 @@
 
 .sbu-members-preview,
 .sbu-members-legacy {
-    margin-top: 16px;
+    margin-top: 8px;
+}
+
+.sbu-members-notes[open] > summary {
+    margin-bottom: 6px;
+}
+
+.sbu-members-reset {
+    display: block;
+    margin: 8px 0 0 auto;
 }
 
 .sbu-members-panel summary {
@@ -249,20 +259,6 @@
     }
 }
 
-@media (max-width: 450px) {
-    .sbu-members-header h2 {
-        flex-basis: calc(100% - 88px);
-    }
-
-    .sbu-members-close {
-        order: 1;
-    }
-
-    .sbu-members-reset {
-        order: 2;
-        margin-left: auto;
-    }
-}
 .sbu-scene-controls { min-width: 0; margin-block: 8px; }
 .sbu-scene-body { display: flex; flex-direction: column; gap: 8px; padding-block: 8px; }
 .sbu-scene-toggle { display: flex; gap: 8px; align-items: center; }
