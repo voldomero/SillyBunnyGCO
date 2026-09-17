@@ -141,6 +141,8 @@ Open **Group Dynamics**, select a card, expand **Current scene**, and enable its
 
 Use **Arrive**, **Depart**, **Connect remotely**, **Disconnect** or **Set absent** as appropriate. **Clear scene state** returns the selected card to unspecified. Turning the feature off removes its restrictions while keeping saved choices.
 
+Scene choices and shared notes stay in SillyBunny's saved settings. Pending edits are also kept in the current browser tab so they can recover after a reload or server restart. Group Dynamics shows whether the server has confirmed the save and offers **Retry saving** if needed. Wait for confirmation before closing the tab or switching devices. Recovery respects newer saved changes; conflicting edits remain available through **Download recovery copy**. Scene choices still belong to their original conversation; a different or renamed chat does not inherit them.
+
 These controls do not add or remove group members, change mute settings, take over native routing, or alter what any character knows. A quiet member can still be present; selecting a speaker does not change scene state. The controls record current choices, not arrival/departure messages or historical witness events.
 
 Choices save in extension settings under the exact conversation and character-card identity, not in the transcript. Duplicate names remain separate. State for missing or changed card identities is kept without reassignment by name. New chat identities, including new branches, start unspecified; state is not inferred or copied from their transcript. Existing history remains unknown for witness purposes. Unsupported saved scene formats are preserved and editing is gated.

@@ -7,13 +7,14 @@ const dependencyUrl = path => {
     if (token) url.searchParams.set('v', token);
     return url.href;
 };
-const [{ createAssetUrl }, store, { buildContext }, { createHostAdapter }, { createCleanupScope }, { createSceneStore }] = await Promise.all([
+const [{ createAssetUrl }, store, { buildContext }, { createHostAdapter }, { createCleanupScope }, { createSceneStore }, { createSettingsPersistence }] = await Promise.all([
     import(dependencyUrl('./src/assets.js')),
     import(dependencyUrl('./src/settings.js')),
     import(dependencyUrl('./src/context-builder.js')),
     import(dependencyUrl('./src/host-adapter.js')),
     import(dependencyUrl('./src/lifecycle.js')),
     import(dependencyUrl('./src/scene-state.js')),
+    import(dependencyUrl('./src/settings-persistence.js')),
 ]);
 export const assetUrl = createAssetUrl(import.meta.url);
 const host = createHostAdapter({ getContext });
@@ -22,6 +23,7 @@ let promptRevision = 0;
 let disabled = false;
 let heightModule;
 let scene;
+let persistence;
 const options = (context = getContext()) => store.readSettings(context.extensionSettings);
 
 export function resolveMembers(context, group = host.activeConversation(context)?.group) {
@@ -136,9 +138,10 @@ function settingsChanged() {
 
 function setNote(character, text) {
     const context = getContext();
+    const before = persistence?.capture();
     const stored = store.ensureSettings(context.extensionSettings);
     if (!store.setCharacterNote(stored, currentCharacter(character), context.characters, text)) return false;
-    context.saveSettingsDebounced();
+    if (!persistence?.record(before)) context.saveSettingsDebounced();
     settingsChanged();
     return true;
 }
@@ -147,13 +150,17 @@ const settingsFacade = {
     get: () => options(),
     update(patch) {
         const context = getContext();
+        const before = persistence?.capture();
         const stored = store.ensureSettings(context.extensionSettings);
         for (const [key, value] of Object.entries(patch)) {
             if (Object.hasOwn(store.defaults, key)) stored[key] = value;
         }
-        context.saveSettingsDebounced();
+        if (!persistence?.record(before)) context.saveSettingsDebounced();
         settingsChanged();
     },
+    getSaveStatus: () => persistence?.getStatus() ?? { message: '', pending: 0, conflicts: 0, unsafe: false },
+    retrySave: () => persistence?.flush(),
+    getRecovery: () => persistence?.getRecovery(),
     subscribe(listener) {
         settingsListeners.add(listener);
         return () => settingsListeners.delete(listener);
@@ -214,6 +221,41 @@ export async function initialize() {
             else if (legacyNoteTarget.length) legacyNoteTarget.append(noteElement);
             settingsTarget.append(settingsElement);
             store.ensureSettings(context.extensionSettings);
+            const persistenceSupport = await host.prepareSettingsPersistence();
+            if (scope.closed || isDisabled()) throw new Error('Group Utilities initialization cancelled');
+            let recoveryStorage;
+            let recoveryKey;
+            if (persistenceSupport) {
+                try {
+                    // Survives reload/server restart, without sharing pending edits across tabs.
+                    recoveryStorage = sessionStorage;
+                    recoveryKey = `st-group-utils:pending:${JSON.stringify(persistenceSupport.accountKey)}`;
+                } catch { /* The save status reports unavailable browser recovery. */ }
+            }
+            const ownedPersistence = createSettingsPersistence({
+                getSettings: () => store.ensureSettings(getContext().extensionSettings),
+                storage: recoveryStorage, storageKey: recoveryKey,
+                save: persistenceSupport?.save ?? (() => { getContext().saveSettingsDebounced(); }),
+                onChange: settingsChanged,
+            });
+            persistence = ownedPersistence;
+            scope.add(() => {
+                // Disabling this UI must not abandon edits still waiting for its timer.
+                try {
+                    if (ownedPersistence.getStatus().pending) {
+                        const saving = persistenceSupport ? persistenceSupport.save() : getContext().saveSettingsDebounced();
+                        Promise.resolve(saving).catch(error => console.warn('[Group Utilities] Pending settings save failed', error));
+                    }
+                } finally {
+                    ownedPersistence.destroy();
+                    if (persistence === ownedPersistence) persistence = undefined;
+                }
+            });
+            ownedPersistence.restore();
+            on(context.eventTypes.SETTINGS_LOADED, () => { void ownedPersistence.flush(); });
+            const retryPendingSave = () => { void ownedPersistence.flush(); };
+            window.addEventListener?.('online', retryPendingSave);
+            scope.add(() => window.removeEventListener?.('online', retryPendingSave));
             const refreshNote = () => {
                 const character = editorCharacter(getContext());
                 const note = getNote(character);
