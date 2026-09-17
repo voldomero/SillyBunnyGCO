@@ -12,7 +12,7 @@ This project exists to make group chats in [SillyBunny](https://github.com/platb
 
 - **Group Dynamics → Current scene** now provides opt-in controls for present, absent and remotely connected members. Unspecified is the default. Choices belong to the exact card and conversation, and save through extension settings without writing the transcript.
 - Scene restrictions apply to this extension's **Ask** actions, Reply Rules and focus. Membership and mute remain separate. When this extension does not own routing, the host can select replies independently.
-- Optional **Scene suggestions** use an explicitly selected direct OpenAI connection profile. Each manual request may cost money. Suggestions require review and one explicit Apply action; they do not select speakers or run automatically.
+- Optional **Scene suggestions** use an explicitly selected saved connection profile. Chat-completion and text-completion providers supported by SillyBunny's background request service are available, including custom OpenAI-compatible endpoints and local models. Each manual request may cost money. Suggestions require review and one explicit Apply action; they do not select speakers or run automatically.
 - Optional prose styling uses the host's existing quote and emphasis markup. It leaves message text and code unchanged and requires no special model output.
 - **Historical witnesses and knowledge/history filtering are unavailable.** Current scene choices do not establish who witnessed earlier events. Automatic turn suggestions are also unavailable.
 
@@ -151,9 +151,13 @@ Historical witness recording and knowledge/history filtering are **unavailable**
 
 ## Optional scene suggestions
 
-First enable current-scene controls in a group. In **Group Utils → Scene suggestions (optional)**, enable suggestions and explicitly choose a **direct OpenAI connection profile** with a saved model and credential selection. If the verified host request service or a supported profile is unavailable, requesting stays disabled. There is no automatic profile fallback.
+First enable current-scene controls in a group. In **Group Utils → Scene suggestions (optional)**, enable suggestions and explicitly choose a **saved connection profile**. This does not switch your active chat connection. OpenAI, other chat providers, custom OpenAI-compatible endpoints such as NanoGPT, and local text-completion profiles use SillyBunny's own request service. An OpenAI key is not required for other providers.
 
-Enter a description in **Describe the current scene**, then choose **Suggest scene changes**. Each request uses that connection and may cost money and take time. Along with fixed response-format instructions, it sends only the description you enter, exact card filenames, card names and current scene states. It does not include chat history, shared notes, character descriptions or the composer draft. The entered description and returned suggestions are not saved by this extension.
+The selected profile supplies its connection address, credentials, proxy and custom request settings through the host. Model and key requirements depend on the provider. Suggestions skip chat generation and instruct presets and send their own scene prompt. Advanced custom request settings retain SillyBunny's normal behavior. If a connection fails, check that saved profile's address, model and credentials; there is no automatic profile fallback.
+
+Saved profiles remain visible even when temporarily unavailable. Legacy KoboldAI, Horde and NovelAI connection types are not supported by SillyBunny's background profile service; selecting one explains the limitation. KoboldCpp text-completion profiles are supported.
+
+Enter a description in **Describe the current scene**, then choose **Suggest scene changes**. Each request uses that connection and may cost money and take time. The extension builds its prompt from fixed response-format instructions, the description you enter, exact card filenames, card names and current scene states. It does not add chat history, shared notes, character descriptions or the composer draft. Your profile's custom request settings also apply. The entered description and returned suggestions are not saved by this extension.
 
 The response must contain at most three proposals, unique known cards, valid current-to-new states, and no unsupported fields. Invalid responses are rejected. Review each explanation; a model suggestion can be wrong. **Apply change for [card]** applies only that proposal and clears the entire batch. Request fresh suggestions to consider another change. Nothing is applied automatically.
 
