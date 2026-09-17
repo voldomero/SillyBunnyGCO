@@ -1,5 +1,5 @@
-/** A single request owner. The inspected host cannot prove completion or safe queue advancement. */
-export function createTurnController({ host, settings, decide, scene, suggestions, timeoutMs = 120000,
+/** Coordinate manual requests, suggestions and the optional versioned host routing lease. */
+export function createTurnController({ host, settings, decide, scene, suggestions, createRoutingController, timeoutMs = 120000,
     setTimer = setTimeout, clearTimer = clearTimeout }) {
     let disposed = false;
     let epoch = 0;
@@ -22,6 +22,10 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         const cards = rules().characters;
         return !cards || !Object.hasOwn(cards, avatar) || cards[avatar]?.enabled !== false;
     };
+    const routing = createRoutingController?.({ host, settings, scene, decide,
+        canStart: () => !disposed && !active, getFocus: () => [...focus], onChange: notify,
+        timeoutMs, setTimer, clearTimer });
+    const routingState = () => routing?.getState() ?? { automatic: false, staged: [], busy: false, pending: [], status: '' };
 
     function sync() {
         const key = host.activeConversation()?.key;
@@ -46,7 +50,10 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         }
     }
 
-    function invalidate(reason = 'Request cleared. Use native Stop to stop any running response.') {
+    function invalidate(reason) {
+        reason ??= active?.nativeCancellation
+            ? 'Request cleared. Cancellation requested; reply completion is unverified.'
+            : 'Request cleared. Use native Stop to stop any running response.';
         epoch++;
         proposalBatch = undefined;
         if (active) {
@@ -61,7 +68,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
     function canAskToRespond(avatar, key) {
         sync();
         if (disposed) return { allowed: false, reason: 'Responder controls are disabled.' };
-        if (active) return { allowed: false, reason: 'A reply or suggestion request is still outstanding.' };
+        if (active || routingState().busy) return { allowed: false, reason: 'A reply or suggestion request is still outstanding.' };
         const scenePermission = scene?.canRespond(avatar, key);
         if (scenePermission?.allowed === false) return scenePermission;
         return host.canAskToRespond(avatar, key);
@@ -70,22 +77,31 @@ export function createTurnController({ host, settings, decide, scene, suggestion
     async function askToRespond(avatar, key) {
         const allowed = canAskToRespond(avatar, key);
         if (!allowed.allowed) return { ok: false, status: 'rejected', reason: allowed.reason };
+        routing?.clearStage();
+        routing?.setAutomatic(false);
         const current = host.getContext();
         const member = host.resolveMembers().find(item => item.avatar === avatar);
         const request = { avatar, character: member.character, key: host.activeConversation().key,
-            chat: current.chat, origin: current.chat?.at(-1), epoch: ++epoch, invalid: false };
+            chat: current.chat, origin: current.chat?.at(-1), epoch: ++epoch, invalid: false,
+            abort: new AbortController(), nativeCancellation: current.generationSupportsRequestControls === true };
         const cancelled = new Promise(resolve => { request.cancel = resolve; });
         active = request;
         proposalBatch = undefined;
         status = `Requesting ${member.name}…`;
         notify();
         const timer = setTimer(() => {
-            if (active === request && !request.invalid) invalidate('Reply request timed out. Completion is unknown; no retry was made. Use native Stop if needed.');
+            if (active === request && !request.invalid) invalidate(request.nativeCancellation
+                ? 'Reply request timed out. Cancellation requested; completion is unknown. No retry was made.'
+                : 'Reply request timed out. Completion is unknown; no retry was made. Use native Stop if needed.');
         }, timeoutMs);
         // Even after timeout/invalidation the lock lasts until the original host call settles.
         const execution = (async () => {
             try {
-                const result = await host.askToRespond(avatar, request.key);
+                // A view listener may clear or disable the request during the initial notification.
+                if (request.abort.signal.aborted) return { ok: false, status: 'invalidated', reason: 'The request is no longer current.' };
+                const result = await (request.nativeCancellation
+                    ? host.askToRespond(avatar, request.key, { signal: request.abort.signal })
+                    : host.askToRespond(avatar, request.key));
                 sync();
                 if (disposed || request.invalid || request.epoch !== epoch || conversationKey !== request.key) {
                     return { ok: false, status: 'invalidated', reason: 'The request is no longer current.' };
@@ -110,7 +126,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
     function canSuggest(profileId) {
         sync();
         if (disposed || settings.get().scene_suggestions !== true) return { allowed: false, reason: 'Scene suggestions are disabled.' };
-        if (active) return { allowed: false, reason: 'Wait for the outstanding reply or suggestion request.' };
+        if (active || routingState().busy) return { allowed: false, reason: 'Wait for the outstanding reply or suggestion request.' };
         const snapshot = scene?.getSnapshot();
         if (!snapshot?.key || !snapshot.enabled || !snapshot.supported || !snapshot.participants.length) {
             return { allowed: false, reason: 'Enable current-scene controls in a group conversation first.' };
@@ -183,7 +199,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
 
     function applySceneSuggestion(proposal) {
         sync();
-        if (active || !proposalBatch?.current() || !proposalBatch.proposals.includes(proposal)) {
+        if (active || routingState().busy || !proposalBatch?.current() || !proposalBatch.proposals.includes(proposal)) {
             return { ok: false, reason: 'This suggestion is no longer current. Request a fresh suggestion.' };
         }
         const valid = suggestions.validateSceneProposal(proposal, scene.getSnapshot().participants);
@@ -216,14 +232,17 @@ export function createTurnController({ host, settings, decide, scene, suggestion
 
     function getState() {
         sync();
-        return { key: conversationKey, focus: [...focus], busy: Boolean(active),
-            pending: active && active.key === conversationKey && !active.invalid && active.avatar ? [active.avatar] : [], status };
+        const routed = routingState();
+        return { key: conversationKey, focus: [...focus], busy: Boolean(active) || routed.busy,
+            pending: active && active.key === conversationKey && !active.invalid && active.avatar ? [active.avatar] : routed.pending,
+            status: active ? status : routed.status || status };
     }
 
     function destroy() {
         if (disposed) return;
         disposed = true;
         invalidate('Responder controls disabled.');
+        routing?.destroy();
         focus = [];
         for (const cleanup of cleanups.reverse()) {
             try { cleanup(); } catch (error) { console.warn('[Group Utilities] Responder cleanup failed', error); }
@@ -254,6 +273,11 @@ export function createTurnController({ host, settings, decide, scene, suggestion
             if (active?.kind === 'suggestion') invalidate('Scene suggestion stopped.');
             else { proposalBatch = undefined; notify(); }
         },
-        clearFocus() { focus = []; notify(); }, clear: invalidate,
+        getRoutingState() { return { ...routingState(), available: Boolean(routing) }; },
+        setAutomaticRouting(enabled) { return routing?.setAutomatic(enabled) ?? false; },
+        stageResponder(avatar, key) { return routing?.stageResponder(avatar, key) ?? false; },
+        clearStagedResponder() { routing?.clearStage(); },
+        clearFocus() { focus = []; notify(); },
+        clear(reason) { invalidate(reason); routing?.clear(reason); },
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, destroy };
 }

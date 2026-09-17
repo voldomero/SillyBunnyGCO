@@ -15,6 +15,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
     let shownKey;
     let memberSignature;
     let phraseSignature;
+    let actionFeedback = '';
     const capabilities = host.routingCapabilities();
     const compact = node('section', undefined, 'sbu-responder-compact');
     compact.id = 'sbu-responder-compact';
@@ -37,6 +38,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         if (member) writeAs(member.character, host.activeConversation()?.key);
     }, 'sbu-responder-write');
     const ask = button('Ask now', async () => {
+        actionFeedback = '';
         const member = selected();
         const key = host.activeConversation()?.key;
         if (!member) return;
@@ -46,11 +48,17 @@ export function createResponderControls({ host, settings, controller, writeAs, n
             refresh();
         }
     }, 'sbu-responder-ask');
-    const stage = button('Choose next responder', () => {}, 'sbu-responder-stage');
+    const stage = button('Choose next responder', () => {
+        const result = selectedAvatar && controller.stageResponder(selectedAvatar, host.activeConversation()?.key);
+        actionFeedback = result?.ok === false ? result.reason : '';
+        refresh();
+    }, 'sbu-responder-stage');
     stage.disabled = true;
     stage.title = capabilities.reason;
-    const clearRequest = button('Clear request', () => controller.clear(), 'sbu-responder-clear');
+    const clearRequest = button('Clear request', () => { actionFeedback = ''; controller.clear(); }, 'sbu-responder-clear');
     compactActions.append(write, ask, stage, clearRequest);
+    const clearStage = button('Clear next responder', () => controller.clearStagedResponder(), 'sbu-responder-clear-stage');
+    compactActions.append(clearStage);
     const requestStatus = node('p', '', 'sbu-responder-status');
     requestStatus.setAttribute('role', 'status');
     const stageHint = node('p', 'Next-message selection is unavailable on this host. No responder is staged.', 'sbu-responder-hint');
@@ -62,13 +70,20 @@ export function createResponderControls({ host, settings, controller, writeAs, n
     const body = node('div', undefined, 'sbu-reply-rules-body');
     const gate = node('p', capabilities.reason, 'sbu-responder-hint');
     gate.id = 'sbu-routing-gate';
-    const automatic = button('Automatic routing unavailable', () => {}, 'sbu-routing-enable');
+    const routingStatus = node('p', '', 'sbu-responder-status');
+    routingStatus.id = 'sbu-routing-status';
+    routingStatus.setAttribute('role', 'status');
+    const automatic = button('Automatic routing unavailable', () => {
+        const result = controller.setAutomaticRouting(!controller.getRoutingState().automatic);
+        actionFeedback = result?.ok === false ? result.reason : '';
+        refresh();
+    }, 'sbu-routing-enable');
     automatic.disabled = true;
     automatic.setAttribute('aria-describedby', gate.id);
     const conflict = node('p', '', 'sbu-responder-hint');
     const configWarning = node('p', '', 'sbu-responder-hint');
     const general = node('fieldset');
-    general.append(node('legend', 'Local rule preview'));
+    general.append(node('legend', 'Reply Rules'));
     const fields = new Map();
     const record = value => value !== null && typeof value === 'object' && !Array.isArray(value);
     const rawRules = () => settings.get().reply_rules;
@@ -94,7 +109,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         general.append(row);
         fields.set(key, input);
     }
-    field('enabled', 'Enable local rule preview (does not send replies)', 'checkbox');
+    field('enabled', 'Enable Reply Rules (automatic routing is a separate choice)', 'checkbox');
     field('focusEnabled', 'Enable session focus for this conversation', 'checkbox');
     field('multiSpeaker', 'Select multiple addressed members', 'checkbox');
     field('mentionOrder', 'Select in order of first mention', 'checkbox');
@@ -138,7 +153,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
     const previewSummary = node('p', '', 'sbu-responder-status');
     previewSummary.setAttribute('role', 'status');
     const hint = node('p', 'Rules match literal words and phrases, including mentions in discussion; they do not understand intent. Each phrase is a separate entry and may contain commas. Names shared by cards need unique aliases. Rules apply to these exact cards across groups. Focus lasts only in this open conversation; it is not saved.', 'sbu-responder-hint');
-    body.append(gate, automatic, conflict, configWarning, general, hint, editLabel, cardPicker, cardEnabledLabel,
+    body.append(gate, automatic, routingStatus, conflict, configWarning, general, hint, editLabel, cardPicker, cardEnabledLabel,
         phrases, focusStatus, focusActions, testLabel, testText, useDraft, previewSummary, preview);
     rulesPanel.append(body);
 
@@ -176,7 +191,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         if (destroyed) return;
         const key = host.activeConversation()?.key;
         const members = host.resolveMembers();
-        if (shownKey !== key) { selectedAvatar = undefined; testText.value = ''; phraseSignature = undefined; }
+        if (shownKey !== key) { selectedAvatar = undefined; testText.value = ''; phraseSignature = undefined; actionFeedback = ''; }
         shownKey = key;
         selectedAvatar = members.some(member => member.avatar === selectedAvatar) ? selectedAvatar : members[0]?.avatar;
         const signature = JSON.stringify(members.map(member => [member.avatar, member.name, member.disabled]));
@@ -194,16 +209,33 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         picker.disabled = cardPicker.disabled = !members.length;
         compact.hidden = !settings.get().responder_picker || !key;
         const state = controller.getState();
+        const routed = controller.getRoutingState?.() ?? { available: false, automatic: false, staged: [], busy: false };
+        const capabilities = host.routingCapabilities();
+        const supported = routed.available && capabilities.automatic && capabilities.staged;
         const allowed = selectedAvatar && controller.canAskToRespond(selectedAvatar, key);
         ask.disabled = !allowed?.allowed;
         ask.title = allowed?.reason ?? 'Open a group conversation.';
         ask.textContent = selected()?.disabled ? 'Ask now (automatic replies off)' : 'Ask now';
         write.disabled = !selectedAvatar || state.busy;
-        clearRequest.disabled = !state.pending.length;
-        requestStatus.textContent = state.pending.length ? `Pending: ${state.pending.join(', ')}. Use native Stop to stop generation.`
-            : state.status || (!allowed?.allowed ? allowed?.reason ?? '' : '');
+        clearRequest.disabled = !state.busy;
+        requestStatus.textContent = actionFeedback || (state.pending.length ? `Pending: ${state.pending.join(', ')}. Use native Stop to stop generation.`
+            : state.status || (!allowed?.allowed ? allowed?.reason ?? '' : ''));
         const raw = rawRules();
         const config = normalizeRuleConfig(raw);
+        stage.disabled = !supported || !selectedAvatar || Boolean(selected()?.disabled) || state.busy;
+        stage.title = supported ? 'Apply this choice to the next successfully saved user message.' : capabilities.reason;
+        clearStage.hidden = !routed.staged.length;
+        clearStage.disabled = !routed.staged.length;
+        stageHint.textContent = !supported ? 'Next-message selection is unavailable on this host. No responder is staged.'
+            : routed.staged.length ? `Next responder: ${routed.staged.join(', ')}. A failed send keeps this choice.`
+                : 'No responder is staged. Choices apply once and clear when the conversation changes.';
+        automatic.textContent = !supported ? 'Automatic routing unavailable'
+            : routed.automatic ? 'Turn off automatic routing' : 'Enable automatic routing for this chat';
+        automatic.disabled = !supported || (!routed.automatic && (!config.enabled || state.busy));
+        automatic.setAttribute('aria-pressed', String(routed.automatic));
+        gate.textContent = !supported ? capabilities.reason
+            : 'Routing lasts for this open chat. Ask now, native strategy changes, or leaving the chat turn it off. Clear request cancels the turn and turns routing off.';
+        routingStatus.textContent = actionFeedback || routed.status || '';
         general.disabled = raw != null && !record(raw);
         configWarning.textContent = general.disabled ? 'Saved rule configuration is not a supported object. It has been preserved; editing is unavailable.' : '';
         for (const [key, input] of fields) {
@@ -239,12 +271,12 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         focusStatus.textContent = state.focus.length ? `Session focus: ${state.focus.join(', ')}` : 'No conversation focus.';
         focusButton.disabled = !config.enabled || !config.focusEnabled || !selectedAvatar || selected()?.disabled || card.enabled === false;
         clearFocus.disabled = !state.focus.length;
-        const signals = host.routingCapabilities().competitors;
+        const signals = capabilities.competitors;
         conflict.textContent = signals.length ? `Possible competing automatic router settings: ${signals.join(', ')}. Nothing has been disabled. Our automatic routing stays inactive.` : '';
         renderPreview();
     }
 
-    function changeSelection(event) { selectedAvatar = event.target.value; refresh(); }
+    function changeSelection(event) { selectedAvatar = event.target.value; actionFeedback = ''; refresh(); }
     function keyboard(event) {
         if (event.key === 'Enter' && event.target.closest('button, input, select, textarea')) event.stopPropagation();
     }

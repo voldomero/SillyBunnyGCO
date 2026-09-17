@@ -160,9 +160,13 @@ export function createHostAdapter({
         ].filter(([, enabled]) => enabled === true)
             .filter(([, , pattern]) => !disabled.some(name => pattern.test(name)))
             .map(([name]) => name);
+        const routing = context().groupTurnRouting;
+        const supported = routing?.version === 1 && typeof routing.acquire === 'function';
         return {
-            staged: false, automatic: false,
-            reason: 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
+            staged: supported, automatic: supported,
+            reason: supported
+                ? 'Routing is available for this conversation. Enable it explicitly; native strategy changes end this session.'
+                : 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
             competitors,
         };
     }
@@ -385,19 +389,22 @@ export function createHostAdapter({
         return { allowed: true, reason: '' };
     }
 
-    async function askToRespond(avatar, expectedChatKey) {
-        if (!canAskToRespond(avatar, expectedChatKey).allowed) return false;
+    async function askToRespond(avatar, expectedChatKey, { signal } = {}) {
+        if (signal?.aborted || !canAskToRespond(avatar, expectedChatKey).allowed) return false;
         const current = context();
         const chatKey = getActiveConversation(current)?.key;
         const chat = current.chat;
         if (expectedChatKey !== undefined && chatKey !== expectedChatKey) return false;
         const member = resolveActiveMembers(current).find(item => item.avatar === avatar);
-        if (!member) return false;
+        if (!member || signal?.aborted) return false;
         generationPending = true;
         try {
-            await current.generate('normal', { force_chid: member.characterId });
+            const options = { force_chid: member.characterId };
+            // Only the audited host contract bridges caller cancellation to its owned request.
+            if (signal && current.generationSupportsRequestControls === true) options.signal = signal;
+            await current.generate('normal', options);
             const latest = context();
-            return getActiveConversation(latest)?.key === chatKey && latest.chat === chat;
+            return !signal?.aborted && getActiveConversation(latest)?.key === chatKey && latest.chat === chat;
         } finally {
             generationPending = false;
         }
