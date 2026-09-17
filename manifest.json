@@ -7,7 +7,7 @@
     "css": "style.css",
     "generate_interceptor": "groupUtils_generationInterceptor",
     "author": "aracnai",
-    "version": "1.8",
+    "version": "0.01",
     "homePage": "https://github.com/voldomero/SillyBunnyGCO",
     "auto_update": false
 }

@@ -34,7 +34,8 @@ async function initializeMembersPanel() {
         })), cancellation]);
         const [{ createMembersPanel }, { writeAsCharacter }, { createTurnController },
             { evaluateReplyRules, normalizeRuleConfig }, { createResponderControls }, { createSceneControls },
-            { createSuggestionAdapter }, suggestionDecisions, { createSuggestionControls }, { createProseStyles }] = await Promise.race([Promise.all([
+            { createSuggestionAdapter }, suggestionDecisions, { createSuggestionControls }, { createProseStyles },
+            { createRoutingController }] = await Promise.race([Promise.all([
             import(assetUrl('./src/members-panel.js')),
             import(assetUrl('./groupSendAs.js')),
             import(assetUrl('./src/turn-controller.js')),
@@ -45,12 +46,14 @@ async function initializeMembersPanel() {
             import(assetUrl('./src/scene-suggestions.js')),
             import(assetUrl('./src/suggestion-controls.js')),
             import(assetUrl('./src/prose-styles.js')),
+            import(assetUrl('./src/routing-controller.js')),
         ]), cancellation]);
         if (scope.closed || bundleState.bundleDisabled) throw new Error('Group Members initialization cancelled');
         await Promise.race([api.host.prepareSuggestionSupport(), cancellation]);
         if (scope.closed || bundleState.bundleDisabled) throw new Error('Group Members initialization cancelled');
         const adapter = createSuggestionAdapter({ getContext: api.host.getContext, isGenerating: api.host.isGenerating });
-        const controller = createTurnController({ ...api, decide: evaluateReplyRules, suggestions: { adapter, ...suggestionDecisions } });
+        const controller = createTurnController({ ...api, decide: evaluateReplyRules, createRoutingController,
+            suggestions: { adapter, ...suggestionDecisions } });
         scope.add(() => controller.destroy());
         bundleState.turnController = controller;
         scope.add(() => { if (bundleState.turnController === controller) delete bundleState.turnController; });
