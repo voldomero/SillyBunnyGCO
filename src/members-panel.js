@@ -33,6 +33,19 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     header.append(title, grip, closeButton);
     const content = element('div', 'sbu-members-content');
     const conversationLabel = element('p', 'sbu-members-conversation');
+    const saveStatus = element('p', 'sbu-members-hint sbu-members-save-status');
+    saveStatus.setAttribute('role', 'status');
+    const retrySave = button('Retry saving', () => { void settings.retrySave?.(); }, 'sbu-members-retry-save');
+    const recoveryCopy = button('Download recovery copy', () => {
+        const recovery = settings.getRecovery?.();
+        if (!recovery) return;
+        const url = URL.createObjectURL(new Blob([JSON.stringify(recovery, null, 2)], { type: 'application/json' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'group-dynamics-unsaved-changes.json';
+        link.click();
+        setTimeout(() => URL.revokeObjectURL(url), 0);
+    }, 'sbu-members-recovery-copy');
     const empty = element('p', 'sbu-members-empty', 'Open a group conversation to see its members.');
     const missing = element('p', 'sbu-members-hint');
     const roster = element('details', 'sbu-members-roster');
@@ -81,7 +94,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const previewWarnings = element('ul', 'sbu-members-preview-warnings');
     const refreshPreview = button('Refresh preview', () => renderPreview());
     preview.append(previewSummary, previewSpeaker, previewStatus, previewText, previewWarnings, refreshPreview);
-    content.append(conversationLabel, empty, missing, roster, detail, preview, reset);
+    content.append(conversationLabel, saveStatus, retrySave, recoveryCopy, empty, missing, roster, detail, preview, reset);
     panel.append(header, content);
 
     let shell;
@@ -129,6 +142,11 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
 
     function refresh() {
         if (destroyed) return;
+        const saving = settings.getSaveStatus?.();
+        saveStatus.textContent = saving?.message ?? '';
+        saveStatus.hidden = !saveStatus.textContent;
+        retrySave.hidden = !saving?.pending;
+        recoveryCopy.hidden = !saving?.conflicts && !saving?.unsafe;
         revision++;
         const context = host.getContext();
         const previousKey = renderedSelectionKey;
@@ -296,12 +314,14 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         const character = selected.character;
         recoverLegacy.disabled = Boolean(text);
         noteStatus.textContent = 'Saving note…';
-        Promise.resolve().then(() => setNote(character, text)).then(result => {
-            if (!destroyed && selectionKey() === key) noteStatus.textContent = result === false ? 'The note could not be saved.' : 'Note saved.';
-        }).catch(error => {
+        try {
+            // Capture the edit in this input event, before a reload can interrupt it.
+            const result = setNote(character, text);
+            if (!destroyed && selectionKey() === key) noteStatus.textContent = result === false ? 'The note could not be updated.' : 'Note updated.';
+        } catch (error) {
             if (!destroyed && selectionKey() === key) noteStatus.textContent = 'The note could not be saved.';
             console.warn('[Group Utilities] Member note failed to save', error);
-        });
+        }
     }
     note.addEventListener('input', () => saveNote(note.value));
     preview.addEventListener('toggle', () => {

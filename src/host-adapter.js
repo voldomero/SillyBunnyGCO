@@ -92,6 +92,23 @@ export function createHostAdapter({
         return Boolean(nativeGenerating);
     }
 
+    async function prepareSettingsPersistence() {
+        try {
+            const [script, user] = await Promise.all([
+                importModule('/script.js'), importModule('/scripts/user.js'),
+            ]);
+            // Never use the host's default-user fallback after a failed account lookup.
+            const account = () => user.accountsEnabled === false ? 'default-user'
+                : user.accountsEnabled === true && typeof user.currentUser?.handle === 'string'
+                    && user.currentUser.handle ? user.currentUser.handle : null;
+            const accountKey = account();
+            if (!accountKey || typeof script.saveSettings !== 'function') return null;
+            return { accountKey,
+                save: () => account() === accountKey
+                    ? script.saveSettings(0, { returnResult: true }) : Promise.resolve(false) };
+        } catch { return null; }
+    }
+
     function onContextChanged(callback) {
         const current = context();
         const source = current.eventSource;
@@ -413,6 +430,7 @@ export function createHostAdapter({
     return {
         getContext: context,
         prepareSuggestionSupport,
+        prepareSettingsPersistence,
         isGenerating: () => nativeGenerating?.(),
         activeConversation: (current = context()) => getActiveConversation(current),
         resolveMembers: (current = context()) => resolveActiveMembers(current),

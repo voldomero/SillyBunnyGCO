@@ -2,6 +2,24 @@ const maximumResponseCharacters = 16384;
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
 const nonempty = value => typeof value === 'string' && value.trim().length > 0;
 
+function customReasoning(context, profile, api) {
+    if (api.source !== 'custom') return { overrides: {} };
+    let effort = profile['reasoning-effort'];
+    if (!Object.hasOwn(profile, 'reasoning-effort') && profile.preset) {
+        try {
+            effort = context.getPresetManager?.('openai')?.getCompletionPresetByName(profile.preset)?.reasoning_effort;
+        } catch { /* The native profile resolver also ignores unreadable bound presets. */ }
+    }
+    effort = String(effort ?? '');
+    if (!effort) return { effort, overrides: {} };
+    // includePreset:false bypasses openai.js getReasoningEffort. Keep its Custom wire semantics
+    // without applying a preset or consulting the active chat connection.
+    const wire = effort === 'none' && !/^gpt-5\.([1-9]|\d{2,})/.test(String(profile.model ?? ''))
+        ? undefined : effort === 'min' ? 'minimal' : effort;
+    // An own undefined value blocks native profile/preset fallback and is omitted by JSON.
+    return { effort, overrides: { reasoning_effort: wire } };
+}
+
 /** Request transport only. The turn controller owns serialization, timeout, and cancellation. */
 export function createSuggestionAdapter({ getContext = () => globalThis.SillyTavern?.getContext(), isGenerating } = {}) {
     function inspect(profileId) {
@@ -30,9 +48,10 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
             const generationState = typeof isGenerating === 'function' ? isGenerating() : undefined;
             if (typeof generationState !== 'boolean') return unavailable('Native generation state could not be verified.');
             if (generationState) return unavailable('Wait until native generation is idle.');
-            return { allowed: true, reason: '', profile, chat, textType: api.type,
+            const reasoning = customReasoning(context, profile, api);
+            return { allowed: true, reason: '', profile, chat, textType: api.type, reasoningOverrides: reasoning.overrides,
                 customLengthControls: api.source === 'custom' && context.generationSupportsRequestControls === true,
-                fingerprint: JSON.stringify([profile, api]), service,
+                fingerprint: JSON.stringify([profile, api, reasoning.effort]), service,
                 sendRequest: service.sendRequest };
         } catch { return unavailable('The selected connection profile could not be verified.'); }
     }
@@ -86,6 +105,7 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
             const overrides = captured.chat ? {
                 max_tokens: maxTokens, n: 1, tools: [], tool_choice: 'none',
                 enable_web_search: false, request_images: false, include_reasoning: false,
+                ...captured.reasoningOverrides,
                 cacheScope: 'auxiliary',
             } : { max_tokens: maxTokens, max_new_tokens: maxTokens, cacheScope: 'auxiliary' };
             if (captured.textType === 'ollama') overrides.num_predict = maxTokens;
