@@ -16,9 +16,10 @@ export function createSuggestionControls({ host, settings, controller, adapter }
     const enabled = node('input'); enabled.type = 'checkbox'; enabled.id = 'sbu-suggestions-enabled';
     enabledLabel.htmlFor = enabled.id;
     enabledLabel.append(node('span', 'Enable model-assisted scene suggestions'), enabled);
-    const disclosure = node('p', 'Each request uses the selected connection and may cost money and take time. Only the scene description below, exact card filenames, names, and current scene states are sent. Chat history, notes, and the composer draft are not included. Review before applying; suggestions can be wrong.', 'sbu-responder-hint');
-    const profileLabel = node('label', 'Connection profile (direct OpenAI only)');
+    const disclosure = node('p', 'Each request uses the selected connection and may cost money and take time. The extension builds its prompt from the scene description below, exact card filenames, names, and current scene states. It does not add chat history, notes, or the composer draft. Your profile’s custom request settings also apply. Review before applying; suggestions can be wrong.', 'sbu-responder-hint');
+    const profileLabel = node('label', 'Connection profile');
     const profile = node('select'); profile.id = 'sbu-suggestion-profile'; profileLabel.htmlFor = profile.id;
+    const profileHint = node('p', 'Choose a saved connection profile for suggestions. This does not change your active chat connection.', 'sbu-responder-hint');
     const inputLabel = node('label', 'Describe the current scene');
     const input = node('textarea'); input.id = 'sbu-suggestion-description'; input.rows = 3; input.maxLength = 4000;
     inputLabel.htmlFor = input.id;
@@ -51,7 +52,9 @@ export function createSuggestionControls({ host, settings, controller, adapter }
             profile.replaceChildren();
             const empty = node('option', 'Choose a profile'); empty.value = ''; profile.append(empty);
             for (const item of profiles) {
-                const option = node('option', `${item.name} (${item.model})`); option.value = item.id; profile.append(option);
+                const name = String(item.name || item.id);
+                const model = typeof item.model === 'string' ? item.model.trim() : '';
+                const option = node('option', model ? `${name} (${model})` : name); option.value = item.id; profile.append(option);
             }
             if (selected && !profiles.some(item => item.id === selected)) {
                 const unavailable = node('option', 'Saved profile currently unavailable'); unavailable.value = selected; profile.append(unavailable);
@@ -78,7 +81,7 @@ export function createSuggestionControls({ host, settings, controller, adapter }
         }
     }
     actions.append(request, clear);
-    body.append(enabledLabel, disclosure, profileLabel, profile, inputLabel, input, actions, gate, status, list);
+    body.append(enabledLabel, disclosure, profileLabel, profile, profileHint, inputLabel, input, actions, gate, status, list);
     root.append(body);
     function destroy() {
         if (destroyed) return;

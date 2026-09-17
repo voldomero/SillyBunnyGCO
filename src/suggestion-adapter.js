@@ -15,20 +15,24 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
             if (registry.disabledExtensions.some(name => String(name).replace(/^third-party\//i, '').toLowerCase() === 'connection-manager')) {
                 return unavailable('Connection Manager is disabled.');
             }
-            if (!nonempty(profileId)) return unavailable('Choose a direct OpenAI connection profile explicitly.');
+            if (!nonempty(profileId)) return unavailable('Choose a connection profile explicitly.');
             const matches = registry.connectionManager.profiles.filter(profile => profile?.id === profileId);
             if (matches.length !== 1) return unavailable('The selected connection profile is missing or ambiguous.');
             const profile = matches[0];
-            const api = context.CONNECT_API_MAP?.[profile.api];
-            if (api?.selected !== 'openai' || api.source !== 'openai' || !nonempty(profile.model)
-                || !nonempty(profile['secret-id']) || (profile.proxy && profile.proxy !== 'None')) {
-                return unavailable('Scene suggestions currently require a direct OpenAI profile with a saved model and credential selection.');
+            const api = Object.hasOwn(context.CONNECT_API_MAP ?? {}, profile.api) ? context.CONNECT_API_MAP[profile.api] : undefined;
+            if (!api) return unavailable('The selected profile has no API recognized by SillyBunny.');
+            const chat = api.selected === 'openai' && nonempty(api.source);
+            const text = api.selected === 'textgenerationwebui' && nonempty(api.type);
+            if ((!chat && !text) || (typeof service.isProfileSupported === 'function' && !service.isProfileSupported(profile))) {
+                return unavailable('SillyBunny’s background profile service does not support this connection type. Choose a chat-completion or text-completion profile.');
             }
             // The host exposes this predicate from /script.js, not getContext(). The host adapter verifies it.
             const generationState = typeof isGenerating === 'function' ? isGenerating() : undefined;
             if (typeof generationState !== 'boolean') return unavailable('Native generation state could not be verified.');
             if (generationState) return unavailable('Wait until native generation is idle.');
-            return { allowed: true, reason: '', profile, fingerprint: JSON.stringify(profile), service,
+            return { allowed: true, reason: '', profile, chat, textType: api.type,
+                customLengthControls: api.source === 'custom' && context.generationSupportsRequestControls === true,
+                fingerprint: JSON.stringify([profile, api]), service,
                 sendRequest: service.sendRequest };
         } catch { return unavailable('The selected connection profile could not be verified.'); }
     }
@@ -37,7 +41,7 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
         try {
             const profiles = getContext()?.extensionSettings?.connectionManager?.profiles;
             if (!Array.isArray(profiles)) return [];
-            return profiles.filter(profile => inspect(profile?.id).allowed)
+            return profiles.filter(profile => nonempty(profile?.id) && profiles.filter(item => item?.id === profile.id).length === 1)
                 .map(profile => ({ id: profile.id, name: String(profile.name || profile.id), model: profile.model }));
         } catch { return []; }
     }
@@ -78,15 +82,20 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
         const stillCurrent = () => !signal.aborted && matchesCapture(profileId, captured);
         try {
             // Skipping presets/instruct avoids prompt macros, global settings changes, and profile slash commands.
-            const result = await captured.sendRequest.call(captured.service, profileId, prompt, maxTokens, {
-                stream: false, extractData: true, includePreset: false, includeInstruct: false, signal,
-            }, {
+            // Native profile transport owns provider URLs, credentials, proxies and custom fields.
+            const overrides = captured.chat ? {
                 max_tokens: maxTokens, n: 1, tools: [], tool_choice: 'none',
                 enable_web_search: false, request_images: false, include_reasoning: false,
-                custom_include_body: '', custom_exclude_body: '', custom_include_headers: '',
-                custom_prompt_post_processing: '', reverse_proxy: '', proxy_password: '',
                 cacheScope: 'auxiliary',
-            });
+            } : { max_tokens: maxTokens, max_new_tokens: maxTokens, cacheScope: 'auxiliary' };
+            if (captured.textType === 'ollama') overrides.num_predict = maxTokens;
+            if (captured.textType === 'llamacpp') overrides.n_predict = maxTokens;
+            if (captured.customLengthControls) {
+                overrides.request_controls = { responseLength: maxTokens, preserveReasoningBudget: false };
+            }
+            const result = await captured.sendRequest.call(captured.service, profileId, prompt, maxTokens, {
+                stream: false, extractData: true, includePreset: false, includeInstruct: false, signal,
+            }, overrides);
             if (!stillCurrent()) return reject('invalidated', 'The suggestion request or connection profile is no longer current.');
             const text = result?.content;
             if (typeof text !== 'string' || !text.trim() || text.length > maximumResponseCharacters) {
@@ -95,7 +104,7 @@ export function createSuggestionAdapter({ getContext = () => globalThis.SillyTav
             return { ok: true, status: 'returned', text, reason: '' };
         } catch {
             if (!stillCurrent()) return reject('invalidated', 'The suggestion request or connection profile is no longer current.');
-            return reject('error', 'The suggestion request failed. No retry was made.');
+            return reject('error', 'The suggestion request failed. Check the selected profile’s connection, model and credentials. No retry was made.');
         }
     }
 
