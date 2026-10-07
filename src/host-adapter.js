@@ -113,7 +113,7 @@ export function createHostAdapter({
         const current = context();
         const source = current.eventSource;
         const events = [...new Set(['CHAT_CHANGED', 'GROUP_UPDATED', 'CHARACTER_EDITED', 'SETTINGS_UPDATED',
-            'GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED']
+            'GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'GROUP_SPEAKER_SELECTION_CHANGED']
             .map(name => current.eventTypes?.[name]).filter(Boolean))];
         const registered = [];
         const composerChanged = event => {
@@ -179,13 +179,44 @@ export function createHostAdapter({
             .map(([name]) => name);
         const routing = context().groupTurnRouting;
         const supported = routing?.version === 1 && typeof routing.acquire === 'function';
+        const nativeSpeaker = Boolean(speakerPickApi(context()));
         return {
-            staged: supported, automatic: supported,
+            staged: supported, automatic: supported, nativeSpeaker,
             reason: supported
                 ? 'Routing is available for this conversation. Enable it explicitly; native strategy changes end this session.'
-                : 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
+                : nativeSpeaker
+                    ? 'This host has no verified handoff before native speaker selection or owned completion contract. Automatic routing is unavailable.'
+                    : 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
             competitors,
         };
+    }
+
+    // SillyBunny's speaker bar pick decides who answers the next message; Choose next responder drives it.
+    function speakerPickApi(current) {
+        return typeof current.getSelectedGroupSpeakerAvatar === 'function'
+            && typeof current.setSelectedGroupSpeakerAvatar === 'function' ? current : null;
+    }
+
+    const pickableMember = (current, avatar) => resolveActiveMembers(current)
+        .some(member => member.avatar === avatar && !member.disabled);
+
+    function getNextSpeaker() {
+        const current = context();
+        try {
+            const avatar = speakerPickApi(current)?.getSelectedGroupSpeakerAvatar();
+            return avatar && pickableMember(current, avatar) ? avatar : undefined;
+        } catch { return undefined; }
+    }
+
+    function setNextSpeaker(avatar, expectedChatKey) {
+        const current = context();
+        const active = getActiveConversation(current);
+        // Native group lookup is strict, as in canAskToRespond.
+        if (!speakerPickApi(current) || !active || active.group.id !== current.groupId
+            || (expectedChatKey !== undefined && expectedChatKey !== active.key)) return false;
+        if (avatar !== '' && !pickableMember(current, avatar)) return false;
+        try { return current.setSelectedGroupSpeakerAvatar(avatar) === true; }
+        catch { return false; }
     }
 
     function registerButton({ id, label, onClick, icon = 'fa-users' }, selector, shortcut) {
@@ -438,6 +469,8 @@ export function createHostAdapter({
         onContextChanged,
         onTurnEvent,
         routingCapabilities,
+        getNextSpeaker,
+        setNextSpeaker,
         registerAction: options => registerButton(options, '#extensionsMenu', false),
         registerShortcut: options => registerButton(options, '#gg-action-button-container .gg-regular-buttons-container', true),
         isCurrentMembersOpen,

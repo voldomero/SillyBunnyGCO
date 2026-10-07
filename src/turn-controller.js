@@ -25,7 +25,22 @@ export function createTurnController({ host, settings, decide, scene, suggestion
     const routing = createRoutingController?.({ host, settings, scene, decide,
         canStart: () => !disposed && !active, getFocus: () => [...focus], onChange: notify,
         timeoutMs, setTimer, clearTimer });
-    const routingState = () => routing?.getState() ?? { automatic: false, staged: [], busy: false, pending: [], status: '' };
+    // On hosts with a speaker bar, its pick is the one next responder for both the bar and these controls.
+    const nativeSpeaker = () => host.routingCapabilities?.().nativeSpeaker === true;
+    const sceneMembers = () => host.resolveMembers().map(member => {
+        const permission = scene?.canRespond(member.avatar, conversationKey);
+        return permission ? { ...member, sceneAllowed: permission.allowed, sceneReason: permission.reason } : member;
+    });
+    // The host knows nothing of scenes or Reply Rules, so its pick must pass the decision a routed staged choice gets.
+    const nativeChoiceAllowed = avatar => decide({ members: sceneMembers(), config: { ...rules(), enabled: true },
+        explicit: [avatar] })?.targets?.includes(avatar) === true;
+    const ineligiblePick = 'The staged character is no longer eligible.';
+    const routingState = () => {
+        const state = routing?.getState() ?? { automatic: false, staged: [], busy: false, pending: [], status: '' };
+        if (!nativeSpeaker()) return state;
+        const avatar = host.getNextSpeaker();
+        return { ...state, staged: avatar ? [avatar] : [] };
+    };
 
     function sync() {
         const key = host.activeConversation()?.key;
@@ -48,6 +63,11 @@ export function createTurnController({ host, settings, decide, scene, suggestion
                     || !sceneAllows(active.avatar)))) {
             invalidate('The conversation or character changed. Request invalidated.');
         }
+        const picked = nativeSpeaker() ? host.getNextSpeaker() : undefined;
+        if (picked && !nativeChoiceAllowed(picked)) {
+            status = ineligiblePick;
+            host.setNextSpeaker('');
+        } else if (picked && status === ineligiblePick) status = '';
     }
 
     function invalidate(reason) {
@@ -214,11 +234,27 @@ export function createTurnController({ host, settings, decide, scene, suggestion
 
     function preview(text) {
         sync();
-        const members = host.resolveMembers().map(member => {
-            const permission = scene?.canRespond(member.avatar, conversationKey);
-            return permission ? { ...member, sceneAllowed: permission.allowed, sceneReason: permission.reason } : member;
-        });
-        return decide({ text, members, config: rules(), focus });
+        return decide({ text, members: sceneMembers(), config: rules(), focus });
+    }
+
+    function stageResponder(avatar, key) {
+        if (!nativeSpeaker()) return routing?.stageResponder(avatar, key) ?? false;
+        sync();
+        if (disposed) return { ok: false, reason: 'Routing controls are disabled.' };
+        if (active || routingState().busy) return { ok: false, reason: 'Wait for the outstanding reply or suggestion request.' };
+        const conversation = host.activeConversation();
+        if (!conversation || (key !== undefined && key !== conversation.key)) return { ok: false, reason: 'The active conversation has changed.' };
+        if (!nativeChoiceAllowed(avatar) || !host.setNextSpeaker(avatar, conversation.key)) {
+            return { ok: false, reason: 'This exact character is not eligible to respond.' };
+        }
+        notify();
+        return { ok: true, reason: '' };
+    }
+
+    function clearStagedResponder() {
+        routing?.clearStage();
+        if (nativeSpeaker() && host.getNextSpeaker()) host.setNextSpeaker('');
+        notify();
     }
 
     function setFocus(avatars) {
@@ -275,8 +311,8 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         },
         getRoutingState() { return { ...routingState(), available: Boolean(routing) }; },
         setAutomaticRouting(enabled) { return routing?.setAutomatic(enabled) ?? false; },
-        stageResponder(avatar, key) { return routing?.stageResponder(avatar, key) ?? false; },
-        clearStagedResponder() { routing?.clearStage(); },
+        stageResponder,
+        clearStagedResponder,
         clearFocus() { focus = []; notify(); },
         clear(reason) { invalidate(reason); routing?.clear(reason); },
         subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); }, destroy };

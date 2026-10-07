@@ -17,6 +17,8 @@
     white-space: normal;
 }
 .sbu-responder-compact[hidden] { display: none !important; }
+/* Native menu buttons set display, which otherwise beats the hidden attribute. */
+.sbu-responder-compact [hidden] { display: none !important; }
 .sbu-responder-actions, .sbu-rule-phrase { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .sbu-responder-compact select, .sbu-reply-rules select, .sbu-reply-rules input,
 .sbu-reply-rules textarea { min-width: 0; max-width: 100%; box-sizing: border-box; }
