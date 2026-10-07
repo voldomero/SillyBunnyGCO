@@ -62,7 +62,7 @@ function createController(context, settingsValue = {}) {
     const settings = createSettings(settingsValue);
     const scene = createSceneStore({ host, settings });
     const controller = createTurnController({ host, settings, scene, decide: evaluateReplyRules, createRoutingController });
-    return { host, controller };
+    return { host, controller, scene };
 }
 
 describe('host speaker pick', () => {
@@ -158,6 +158,46 @@ describe('Choose next responder on the speaker bar', () => {
             assert.equal(context.getSelectedGroupSpeakerAvatar(), '');
         }
         assert.equal(controller.stageResponder('bob.png', conversationKey).ok, true);
+    });
+
+    test('refuses a next responder while Reply Rules limits permit no replies', () => {
+        const context = createHostContext();
+        const { controller } = createController(context, { reply_rules: { maxResponses: 0 } });
+
+        assert.equal(controller.stageResponder('bob.png', conversationKey).ok, false);
+        assert.equal(context.getSelectedGroupSpeakerAvatar(), '');
+    });
+
+    test('clears the speaker bar pick when its card leaves the current scene', () => {
+        const context = createHostContext();
+        const { controller, scene } = createController(context, { scene_controls: true });
+        controller.stageResponder('bob.png', conversationKey);
+
+        assert.equal(scene.setState('bob.png', 'absent', conversationKey).ok, true);
+
+        assert.equal(context.getSelectedGroupSpeakerAvatar(), '');
+        assert.equal(controller.getState().status, 'The staged character is no longer eligible.');
+    });
+
+    test('clears a speaker bar pick of a card that Reply Rules exclude', () => {
+        const context = createHostContext();
+        const { controller } = createController(context, { reply_rules: { characters: { 'dave.png': { enabled: false } } } });
+
+        context.setSelectedGroupSpeakerAvatar('dave.png');
+
+        assert.equal(context.getSelectedGroupSpeakerAvatar(), '');
+        assert.equal(controller.getState().status, 'The staged character is no longer eligible.');
+    });
+
+    test('drops the not-eligible notice once an eligible card is picked', () => {
+        const context = createHostContext();
+        const { controller } = createController(context, { reply_rules: { characters: { 'dave.png': { enabled: false } } } });
+        context.setSelectedGroupSpeakerAvatar('dave.png');
+
+        context.setSelectedGroupSpeakerAvatar('bob.png');
+
+        assert.equal(context.getSelectedGroupSpeakerAvatar(), 'bob.png');
+        assert.equal(controller.getState().status, '');
     });
 
     test('keeps the old behaviour on hosts without a speaker pick', () => {
