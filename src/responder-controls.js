@@ -12,6 +12,7 @@ export function createResponderControls({ host, settings, controller, writeAs, n
     const cleanups = [];
     let destroyed = false;
     let selectedAvatar;
+    let followedStage;
     let shownKey;
     let memberSignature;
     let phraseSignature;
@@ -191,8 +192,13 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         if (destroyed) return;
         const key = host.activeConversation()?.key;
         const members = host.resolveMembers();
-        if (shownKey !== key) { selectedAvatar = undefined; testText.value = ''; phraseSignature = undefined; actionFeedback = ''; }
+        if (shownKey !== key) { selectedAvatar = undefined; followedStage = undefined; testText.value = ''; phraseSignature = undefined; actionFeedback = ''; }
         shownKey = key;
+        const state = controller.getState();
+        const routed = controller.getRoutingState?.() ?? { available: false, automatic: false, staged: [], busy: false };
+        // A new pick made elsewhere, such as the speaker bar, moves this picker to the same card.
+        if (routed.staged[0] && routed.staged[0] !== followedStage) selectedAvatar = routed.staged[0];
+        followedStage = routed.staged[0];
         selectedAvatar = members.some(member => member.avatar === selectedAvatar) ? selectedAvatar : members[0]?.avatar;
         const signature = JSON.stringify(members.map(member => [member.avatar, member.name, member.disabled]));
         if (signature !== memberSignature) {
@@ -208,10 +214,9 @@ export function createResponderControls({ host, settings, controller, writeAs, n
         picker.value = cardPicker.value = selectedAvatar ?? '';
         picker.disabled = cardPicker.disabled = !members.length;
         compact.hidden = !settings.get().responder_picker || !key;
-        const state = controller.getState();
-        const routed = controller.getRoutingState?.() ?? { available: false, automatic: false, staged: [], busy: false };
         const capabilities = host.routingCapabilities();
         const supported = routed.available && capabilities.automatic && capabilities.staged;
+        const nextSupported = capabilities.nativeSpeaker || supported;
         const allowed = selectedAvatar && controller.canAskToRespond(selectedAvatar, key);
         ask.disabled = !allowed?.allowed;
         ask.title = allowed?.reason ?? 'Open a group conversation.';
@@ -222,13 +227,14 @@ export function createResponderControls({ host, settings, controller, writeAs, n
             : state.status || (!allowed?.allowed ? allowed?.reason ?? '' : ''));
         const raw = rawRules();
         const config = normalizeRuleConfig(raw);
-        stage.disabled = !supported || !selectedAvatar || Boolean(selected()?.disabled) || state.busy;
-        stage.title = supported ? 'Apply this choice to the next successfully saved user message.' : capabilities.reason;
+        stage.disabled = !nextSupported || !selectedAvatar || Boolean(selected()?.disabled) || state.busy;
+        stage.title = nextSupported ? 'Apply this choice to the next successfully saved user message.' : capabilities.reason;
         clearStage.hidden = !routed.staged.length;
         clearStage.disabled = !routed.staged.length;
-        stageHint.textContent = !supported ? 'Next-message selection is unavailable on this host. No responder is staged.'
+        stageHint.textContent = !nextSupported ? 'Next-message selection is unavailable on this host. No responder is staged.'
             : routed.staged.length ? `Next responder: ${routed.staged.join(', ')}. A failed send keeps this choice.`
-                : 'No responder is staged. Choices apply once and clear when the conversation changes.';
+                : capabilities.nativeSpeaker ? 'No responder is staged.'
+                    : 'No responder is staged. Choices apply once and clear when the conversation changes.';
         automatic.textContent = !supported ? 'Automatic routing unavailable'
             : routed.automatic ? 'Turn off automatic routing' : 'Enable automatic routing for this chat';
         automatic.disabled = !supported || (!routed.automatic && (!config.enabled || state.busy));
