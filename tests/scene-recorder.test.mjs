@@ -1017,6 +1017,31 @@ describe('scene recorder recording', () => {
         assert.equal(note(t.fake.context.chat[late]), undefined);
     });
 
+    test('drops the copied note from a swipe made while scene memory is off', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const id = await t.fake.receive('alice.png', 'First.');
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png'));
+
+        // The host copies the shown version's `extra`, note included, into the generating slot.
+        t.fake.settings.update({ scene_history: false });
+        await t.fake.swipeGenerate(id);
+        assert.equal(note(line), undefined);
+        await t.fake.finishSwipe(id, 'Second, while off.');
+        assert.equal(note(line), undefined);
+        assert.equal(entryNote(line, 1), undefined);
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 0);
+
+        // Back on, the first version still carries its own note and the second has none to hide with.
+        t.fake.settings.update({ scene_history: true });
+        await t.fake.swipeTo(id, 0);
+        assert.deepEqual(note(line), noted('bob.png'));
+        await t.fake.swipeTo(id, 1);
+        assert.equal(note(line), undefined);
+    });
+
     test('tolerates messages without extra or swipe_info', async () => {
         const t = await setup();
         await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);

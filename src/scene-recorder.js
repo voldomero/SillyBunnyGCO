@@ -700,14 +700,16 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         const chat = chatOf();
         const index = Number(id);
         const message = chat[index];
-        if (!live || !isRecord(message)) return;
-        // The new slot's `extra` is the old version's, and its index may be one a removed version had.
+        if (!isRecord(message)) return;
+        // The new slot's `extra` is the old version's, and its index may be one a removed version had. GCO's own
+        // copied note goes while scene memory is off too (its one write then, 2026-10-08), so a version made
+        // while off hides nothing once memory is back on; the older versions keep their own notes.
         if (isEmptySlot(message)) {
             stripRecord(message);
             read.get(message)?.delete(versionOf(message));
             return;
         }
-        if (index !== chat.length - 1 || !recordable(message)) return;
+        if (!live || index !== chat.length - 1 || !recordable(message)) return;
         // n>1 alternatives and /swipes-add versions are read when first shown on the newest line.
         if (isRead(message)) reapply(message, live);
         else noteFresh(message, live);
