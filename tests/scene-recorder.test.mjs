@@ -121,7 +121,7 @@ async function openMissed(fake) {
 describe('scene text', () => {
     test('defines every placeholder once, frozen', () => {
         const keys = ['P1', 'P1h', 'P2', 'P2h', ...Array.from({ length: 26 }, (_, index) => `P${index + 3}`),
-            'P6present', 'P6absent', 'P6remote', 'R1'];
+            'P4off', 'P6present', 'P6absent', 'P6remote', 'P6unspecified', 'P10line', 'R1'];
         assert.ok(Object.isFrozen(SCENE_TEXT));
         assert.deepEqual(Object.keys(SCENE_TEXT).sort(), [...keys].sort());
         for (const key of keys) assert.equal(SCENE_TEXT[key], 'lorum ipsum', key);

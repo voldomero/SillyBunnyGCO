@@ -265,3 +265,37 @@
 .sbu-scene-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .sbu-scene-current { margin: 0; overflow-wrap: anywhere; }
 .sbu-scene-controls summary, .sbu-scene-toggle { min-height: 44px; }
+.sbu-scene-controls .sbu-scene-toggle { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0; }
+.sbu-scene-toggle > input { flex: 0 0 auto; margin: 0; }
+.sbu-scene-toggle > span { flex: 1 1 8em; min-width: 0; overflow-wrap: anywhere; }
+.sbu-scene-controls input:focus-visible { outline: 2px solid var(--sb-focus-ring, currentColor); outline-offset: 2px; }
+.sbu-scene-memory, .sbu-scene-changes { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sbu-scene-controls .sbu-scene-memory p, .sbu-scene-controls .sbu-scene-changes p, .sbu-scene-controls .sbu-scene-join { margin: 0; }
+.sbu-scene-memory-status { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.sbu-scene-memory-status:is([data-state='error'], [data-state='vocalia'], [data-state^='unavailable']) { font-weight: 600; }
+.sbu-scene-memory-error { flex: 1 1 100%; min-width: 0; font-size: 0.88em; font-weight: 400; }
+.sbu-scene-controls .sbu-scene-heading { margin: 0; font-size: 1em; font-weight: 600; }
+.sbu-scene-change-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.sbu-scene-change {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 4px 8px;
+    min-width: 0;
+    padding-top: 6px;
+    border-top: 1px solid var(--SmartThemeBorderColor, currentColor);
+    overflow-wrap: anywhere;
+}
+.sbu-scene-change-summary { display: flex; flex-wrap: wrap; gap: 4px 6px; flex: 1 1 10em; min-width: 0; }
+.sbu-scene-change-name { font-weight: 600; }
+.sbu-scene-change-pending { padding: 0 8px; font-size: 0.85em; border: 1px solid var(--SmartThemeBorderColor, currentColor); border-radius: 999px; }
+.sbu-scene-change-excerpt { flex: 1 1 100%; min-width: 0; font-size: 0.88em; font-style: italic; }
+.sbu-scene-join { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
+.sbu-scene-join-last, .sbu-scene-join-count, .sbu-members-preview-number, .sbu-members-preview-index { font-variant-numeric: tabular-nums; }
+.sbu-members-preview-memory .sbu-members-preview-count { margin: 0 0 4px; }
+.sbu-members-preview-lines { margin: 0 0 8px; padding-left: 20px; overflow-wrap: anywhere; }
+.sbu-members-preview-index { font-weight: 600; }
+
+@media (pointer: coarse) {
+    .sbu-scene-toggle > input { min-width: 24px; min-height: 24px; }
+}
