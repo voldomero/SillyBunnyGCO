@@ -792,6 +792,49 @@ describe('scene recorder recording', () => {
         assert.equal(t.fake.saves.length, 1);
     });
 
+    test('saves a reply whose stream errored at round end', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        // The host stops the stream, then emits the reply event without its own save.
+        await t.fake.emit('GENERATION_STOPPED');
+        const errored = await t.fake.receive('alice.png', 'Half a');
+        assert.deepEqual(note(t.fake.context.chat[errored]), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 0);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.deepEqual(t.fake.saves.map(save => save.options), [{}]);
+
+        // A stream that finished leaves the save to the host.
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Whole.');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 1);
+
+        // A stop after a reply the host saved could be that reply's error seen late, so the round saves once more.
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Whole.');
+        await t.fake.emit('GENERATION_STOPPED');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 2);
+
+        // A stop in a round that wrote nothing saves nothing.
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.emit('GENERATION_STOPPED');
+        await t.fake.receive('alice.png', 'Nobody is away.');
+        await t.fake.emit('GENERATION_STOPPED');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 2);
+    });
+
     test('a continue can only shrink away, also when its stream stopped', async () => {
         const t = await setup();
         await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })],

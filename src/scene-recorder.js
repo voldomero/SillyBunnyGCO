@@ -37,9 +37,9 @@ const SAVE_FAILED = '[Group Utilities] Scene memory could not save the chat.';
 const DETECT_FAILED = '[Group Utilities] Scene memory could not read presence from a line; nothing changed.';
 const CHANGES_FAILED = '[Group Utilities] Scene memory could not list presence changes.';
 
-const HOST_EVENTS = ['CHAT_CHANGED', 'GROUP_UPDATED', 'GENERATION_STARTED', 'GROUP_WRAPPER_STARTED',
-    'GROUP_WRAPPER_FINISHED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED',
-    'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHARACTER_RENAMED_IN_PAST_CHAT'];
+const HOST_EVENTS = ['CHAT_CHANGED', 'GROUP_UPDATED', 'GENERATION_STARTED', 'GENERATION_STOPPED',
+    'GROUP_WRAPPER_STARTED', 'GROUP_WRAPPER_FINISHED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_SWIPED',
+    'MESSAGE_SWIPE_DELETED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHARACTER_RENAMED_IN_PAST_CHAT'];
 // The host saves the chat right after a reply of these types (script.js:6759, 9152).
 const HOST_SAVED = new Set(['normal', 'swipe', 'continue', 'append', 'appendFinal']);
 const CONTINUED = new Set(['continue', 'append', 'appendFinal']);
@@ -674,9 +674,13 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
                 wrote = recordable(message) && noteFresh(message, live, { detected: false });
             } else wrote = recordNew(index, live, { detected: DETECTED.has(type) });
         }
-        let save = strongest(intent, wrote ? receivedSave(type, index < chat.length - 1) : null);
-        if (HOST_SAVED.has(type)) {
+        // A stream that errors is stopped first, then gets this event without the host's save (script.js:6763-6779).
+        const errored = HOST_SAVED.has(type) && round?.stopped === true;
+        if (errored) round.stopped = false;
+        let save = strongest(intent, wrote ? (errored ? 'idle' : receivedSave(type, index < chat.length - 1)) : null);
+        if (HOST_SAVED.has(type) && !errored) {
             // The host's save right after this event carries every change made so far.
+            if (round && (wrote || saver.hasUnsaved())) round.trusted = true;
             saver.clearUnsaved();
             if (save !== 'await' && host.isGenerating() === true) save = null;
         }
@@ -769,7 +773,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     /** The sweep and copy stripping need the chat as it was at the start; that is read only while `recording`. */
     function newRound(key, type, started, recording = true) {
-        const state = { key, type, started, recording, recorded: new Map(), continued: false };
+        const state = { key, type, started, recording, recorded: new Map(), continued: false, stopped: false,
+            trusted: false };
         if (!recording) return state;
         const chat = chatOf();
         const last = chat[chat.length - 1];
@@ -905,6 +910,9 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
                 const swept = sweep(ended, live);
                 if (stripCopies(ended) || swept) saver.markUnsaved();
             }
+            // A stop seen after a reply the host saved: the host's own Stop, or the errored stream's events
+            // reached GCO out of order. Only the latter lost a save, so a round that trusted one saves again.
+            if (ended?.stopped && ended.trusted) saver.markUnsaved();
         } finally {
             round = null;
             const drained = drain();
@@ -1139,6 +1147,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         CHAT_CHANGED: chatChanged,
         GROUP_UPDATED: () => persist(checkJoins('GROUP_UPDATED')),
         GENERATION_STARTED: (type, _options, dryRun) => persist(checkJoins('GENERATION_STARTED', { type, dryRun })),
+        GENERATION_STOPPED: () => { if (round) round.stopped = true; },
         GROUP_WRAPPER_STARTED: startRound,
         GROUP_WRAPPER_FINISHED: finishRound,
         MESSAGE_SENT: messageSent,
