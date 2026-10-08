@@ -366,6 +366,17 @@ export async function initialize() {
             sceneMemory = createSceneRecorder({ host, settings: settingsFacade, scene });
             const ownedMemory = sceneMemory;
             scope.add(() => { ownedMemory.destroy(); if (sceneMemory === ownedMemory) sceneMemory = undefined; });
+            // SillyBunny asks before merging retained companion notes; hosts without the event merge as before.
+            on(context.eventTypes.GENERATION_HIDE_MESSAGES, request => {
+                try {
+                    const current = getContext();
+                    if (disabled || sceneMemory !== ownedMemory || !host.activeConversation(current)) return;
+                    if (!store.memoryOn(options(current))) return;
+                    ownedMemory.declare(request, generatingCharacter(current, resolveMembers(current))?.avatar);
+                } catch (error) {
+                    console.warn('[Group Utilities] Scene memory hide request failed', error);
+                }
+            });
             disabled = false;
             state.groupUtilsApi = { host, settings: settingsFacade, scene, sceneMemory, buildPreview, getNote, setNote };
             state.groupUtilsCleanup = cleanup;

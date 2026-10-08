@@ -37,9 +37,9 @@ const SAVE_FAILED = '[Group Utilities] Scene memory could not save the chat.';
 const DETECT_FAILED = '[Group Utilities] Scene memory could not read presence from a line; nothing changed.';
 const CHANGES_FAILED = '[Group Utilities] Scene memory could not list presence changes.';
 
-const HOST_EVENTS = ['CHAT_CHANGED', 'GROUP_UPDATED', 'GENERATION_STARTED', 'GROUP_WRAPPER_STARTED',
-    'GROUP_WRAPPER_FINISHED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED',
-    'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHARACTER_RENAMED_IN_PAST_CHAT'];
+const HOST_EVENTS = ['CHAT_CHANGED', 'GROUP_UPDATED', 'GENERATION_STARTED', 'GENERATION_STOPPED',
+    'GROUP_WRAPPER_STARTED', 'GROUP_WRAPPER_FINISHED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'MESSAGE_SWIPED',
+    'MESSAGE_SWIPE_DELETED', 'MESSAGE_EDITED', 'MESSAGE_DELETED', 'CHARACTER_RENAMED_IN_PAST_CHAT'];
 // The host saves the chat right after a reply of these types (script.js:6759, 9152).
 const HOST_SAVED = new Set(['normal', 'swipe', 'continue', 'append', 'appendFinal']);
 const CONTINUED = new Set(['continue', 'append', 'appendFinal']);
@@ -133,6 +133,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     let destroyed = false;
     let lastError = null;
     let round = null;
+    // A stop seen outside a round: hosts without the wrapper events never open one (§13).
+    let stopped = false;
     // Changes waiting for the end of the round and of every hold: `queue` from lines, `planned` from the routed plan.
     let pending = null;
     let holds = 0;
@@ -194,6 +196,34 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             const plan = planHidden(items, { speaker, type, joinTime: joins.joinTime(speaker),
                 timeOf: lineTimes(host.getContext()) });
             const hidden = blankItems(items, plan, host.ignoreSymbol());
+            setLastError(null);
+            return hidden;
+        } catch (error) {
+            logOnce(FILTER_FAILED, error);
+            setLastError(messageOf(error));
+            return 0;
+        }
+    }
+
+    /**
+     * The host's hide request (GENERATION_HIDE_MESSAGES), asked before it merges retained companion notes: the
+     * lines filter() will blank for this speaker are declared by index, so their notes stay out of the merge
+     * and none of them hosts it. The request still holds the host-hidden lines whose notes that merge draws
+     * from, so those are declared too when the speaker missed them. The request's copies are planned over,
+     * never changed; the cheap gates run before the host builds them. Returns how many lines were hidden
+     * (0 when the request is skipped or planning fails).
+     */
+    function declare(request, speaker) {
+        try {
+            if (!request || !HIDE_TYPES.has(request.type) || skipReason(speaker)) return 0;
+            const items = request.messages;
+            if (!Array.isArray(items) || typeof request.hide !== 'function') return 0;
+            const plan = planHidden(items, { speaker, type: request.type, joinTime: joins.joinTime(speaker),
+                timeOf: lineTimes(host.getContext()) });
+            let hidden = 0;
+            for (const [index, rule] of plan.entries()) {
+                if (rule && request.hide(index) === true) hidden++;
+            }
             setLastError(null);
             return hidden;
         } catch (error) {
@@ -623,6 +653,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         checkJoins('CHAT_CHANGED');
         const dropped = pending !== null;
         round = null;
+        stopped = false;
         pending = null;
         saver.reset();
         setLastError(null);
@@ -674,9 +705,18 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
                 wrote = recordable(message) && noteFresh(message, live, { detected: false });
             } else wrote = recordNew(index, live, { detected: DETECTED.has(type) });
         }
-        let save = strongest(intent, wrote ? receivedSave(type, index < chat.length - 1) : null);
-        if (HOST_SAVED.has(type)) {
-            // The host's save right after this event carries every change made so far.
+        // A stream that errors is stopped first, then gets this event without the host's save (script.js:6763-6779).
+        // Without a round nothing flushes later, so that reply is saved at once.
+        const errored = HOST_SAVED.has(type) && (round ? round.stopped === true : stopped);
+        if (errored) {
+            if (round) round.stopped = false;
+            else stopped = false;
+        }
+        const erroredSave = round ? 'idle' : 'await';
+        let save = strongest(intent, wrote ? (errored ? erroredSave : receivedSave(type, index < chat.length - 1)) : null);
+        if (HOST_SAVED.has(type) && !errored) {
+            // The host's save right after this event carries every change made so far, a join write included.
+            if (round && (wrote || intent || saver.hasUnsaved())) round.trusted = true;
             saver.clearUnsaved();
             if (save !== 'await' && host.isGenerating() === true) save = null;
         }
@@ -696,14 +736,16 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         const chat = chatOf();
         const index = Number(id);
         const message = chat[index];
-        if (!live || !isRecord(message)) return;
-        // The new slot's `extra` is the old version's, and its index may be one a removed version had.
+        if (!isRecord(message)) return;
+        // The new slot's `extra` is the old version's, and its index may be one a removed version had. GCO's own
+        // copied note goes while scene memory is off too (its one write then, 2026-10-08), so a version made
+        // while off hides nothing once memory is back on; the older versions keep their own notes.
         if (isEmptySlot(message)) {
             stripRecord(message);
             read.get(message)?.delete(versionOf(message));
             return;
         }
-        if (index !== chat.length - 1 || !recordable(message)) return;
+        if (!live || index !== chat.length - 1 || !recordable(message)) return;
         // n>1 alternatives and /swipes-add versions are read when first shown on the newest line.
         if (isRead(message)) reapply(message, live);
         else noteFresh(message, live);
@@ -769,7 +811,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     /** The sweep and copy stripping need the chat as it was at the start; that is read only while `recording`. */
     function newRound(key, type, started, recording = true) {
-        const state = { key, type, started, recording, recorded: new Map(), continued: false };
+        const state = { key, type, started, recording, recorded: new Map(), continued: false, stopped: false,
+            trusted: false };
         if (!recording) return state;
         const chat = chatOf();
         const last = chat[chat.length - 1];
@@ -905,6 +948,9 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
                 const swept = sweep(ended, live);
                 if (stripCopies(ended) || swept) saver.markUnsaved();
             }
+            // A stop seen after a reply the host saved: the host's own Stop, or the errored stream's events
+            // reached GCO out of order. Only the latter lost a save, so a round that trusted one saves again.
+            if (ended?.stopped && ended.trusted) saver.markUnsaved();
         } finally {
             round = null;
             const drained = drain();
@@ -1138,7 +1184,14 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     const handlers = {
         CHAT_CHANGED: chatChanged,
         GROUP_UPDATED: () => persist(checkJoins('GROUP_UPDATED')),
-        GENERATION_STARTED: (type, _options, dryRun) => persist(checkJoins('GENERATION_STARTED', { type, dryRun })),
+        GENERATION_STARTED: (type, _options, dryRun) => {
+            if (!dryRun) stopped = false;
+            return persist(checkJoins('GENERATION_STARTED', { type, dryRun }));
+        },
+        GENERATION_STOPPED: () => {
+            if (round) round.stopped = true;
+            else stopped = true;
+        },
         GROUP_WRAPPER_STARTED: startRound,
         GROUP_WRAPPER_FINISHED: finishRound,
         MESSAGE_SENT: messageSent,
@@ -1234,6 +1287,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     return {
         filter,
+        declare,
         hiddenFor,
         status,
         isOmniscient: avatar => omniscientIn(settings.get(), avatar),

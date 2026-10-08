@@ -414,6 +414,118 @@ describe('scene recorder prompt filter', () => {
     });
 });
 
+/** The host's hide request as SillyBunny's GENERATION_HIDE_MESSAGES hands it out: frozen copies, answered by index. */
+function hideRequest(items, type) {
+    const messages = Object.freeze([...items]);
+    const hidden = new Set();
+    const inRange = index => Number.isInteger(index) && index >= 0 && index < messages.length;
+    return { type, messages, hidden,
+        hide(index) { if (!inRange(index)) return false; hidden.add(index); return true; },
+        isHidden(index) { return hidden.has(index); } };
+}
+
+describe('scene recorder hide request', () => {
+    test('declares the same lines filter blanks, by index, and changes nothing', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        live.push(fake.message({ avatar: 'carol.png', mes: 'three', send_date: iso(START), extra: away('bob.png') }));
+        const ignore = fake.context.symbols.ignore;
+
+        for (const type of ['normal', 'swipe', 'continue']) {
+            const blanked = promptOf(live);
+            const count = recorder.filter(blanked, type, 'bob.png');
+            const expected = blanked.flatMap((item, index) => item.extra?.[ignore] ? [index] : []);
+            const request = hideRequest(promptOf(live), type);
+            assert.equal(recorder.declare(request, 'bob.png'), count, type);
+            assert.deepEqual([...request.hidden].sort((a, b) => a - b), expected, type);
+            assert.deepEqual(request.messages, promptOf(live), type);
+        }
+        assert.equal(live[1].mes, 'two');
+        assert.equal(live[1].extra[ignore], undefined);
+
+        for (const seen of ['alice.png', 'carol.png']) {
+            const request = hideRequest(promptOf(live), 'normal');
+            assert.equal(recorder.declare(request, seen), 0, seen);
+            assert.equal(request.hidden.size, 0, seen);
+        }
+    });
+
+    test('declares a host-hidden line the speaker missed, which the interceptor never sees', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        // The host keeps a hidden line in the request when the merge would draw retained notes from it.
+        live.push(fake.message({ avatar: 'carol.png', mes: 'Hidden aside.', is_system: true, extra: away('bob.png') }));
+        const ignore = fake.context.symbols.ignore;
+
+        const request = hideRequest(promptOf(live), 'normal');
+        assert.equal(recorder.declare(request, 'bob.png'), 2);
+        assert.deepEqual([...request.hidden].sort((a, b) => a - b), [1, 2]);
+
+        const interceptorView = promptOf(live.filter(message => !message.is_system));
+        assert.equal(recorder.filter(interceptorView, 'normal', 'bob.png'), 1);
+        assert.deepEqual(interceptorView.map(item => item.extra?.[ignore] === true), [false, true]);
+        assert.equal(recorder.hiddenFor('bob.png').away, 1);
+    });
+
+    test('declares nothing for prompts, speakers and requests filter would not touch', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        const declares = (request, speaker) => {
+            const count = recorder.declare(request, speaker);
+            assert.equal(request?.hidden?.size ?? 0, count);
+            return count;
+        };
+        const asBob = request => declares(request, 'bob.png');
+
+        for (const type of ['quiet', 'impersonate', undefined]) assert.equal(asBob(hideRequest(promptOf(live), type)), 0, String(type));
+        for (const speaker of [undefined, null, '', 42]) assert.equal(declares(hideRequest(promptOf(live), 'normal'), speaker), 0, String(speaker));
+        for (const request of [undefined, null, {}, { type: 'normal', messages: 'two', hide() {} },
+            { type: 'normal', messages: promptOf(live) }]) {
+            assert.equal(recorder.declare(request, 'bob.png'), 0, JSON.stringify(request));
+        }
+
+        recorder.setOmniscient('bob.png', true);
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        recorder.setOmniscient('bob.png', false);
+        fake.context.extensionSettings.aspect_vocalia = { enabled: true };
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        delete fake.context.extensionSettings.aspect_vocalia;
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 1);
+
+        fake.settings.update({ scene_history: false });
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        fake.settings.update({ scene_history: true });
+        fake.context.groupId = null;
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+    });
+
+    test('declares nothing and logs once when planning throws', async () => {
+        const { fake, recorder, logs } = await setup();
+        await openMissed(fake);
+        let notified = 0;
+        recorder.subscribe(() => notified++);
+        const broken = unreadable(new Error('unreadable extra'));
+        const request = hideRequest([...promptOf(fake.context.chat), broken], 'normal');
+
+        assert.equal(recorder.declare(request, 'bob.png'), 0);
+        assert.equal(request.hidden.size, 0);
+        assert.match(recorder.status().lastError, /unreadable extra/);
+        assert.equal(logs.length, 1);
+        assert.equal(notified, 1);
+
+        assert.equal(recorder.declare(hideRequest([...promptOf(fake.context.chat), broken], 'normal'), 'bob.png'), 0);
+        assert.equal(logs.length, 1);
+        assert.equal(notified, 1);
+
+        assert.equal(recorder.declare(hideRequest(promptOf(fake.context.chat), 'normal'), 'bob.png'), 1);
+        assert.equal(recorder.status().lastError, null);
+        assert.equal(notified, 2);
+    });
+});
+
 describe('scene recorder preview and status', () => {
     test('counts hidden lines for the preview by rule', async () => {
         const { fake, recorder } = await setup({ members: WITH_DAVE });
@@ -792,6 +904,94 @@ describe('scene recorder recording', () => {
         assert.equal(t.fake.saves.length, 1);
     });
 
+    test('saves a reply whose stream errored at round end', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        // The host stops the stream, then emits the reply event without its own save.
+        await t.fake.emit('GENERATION_STOPPED');
+        const errored = await t.fake.receive('alice.png', 'Half a');
+        assert.deepEqual(note(t.fake.context.chat[errored]), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 0);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.deepEqual(t.fake.saves.map(save => save.options), [{}]);
+
+        // A stream that finished leaves the save to the host.
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Whole.');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 1);
+
+        // A stop after a reply the host saved could be that reply's error seen late, so the round saves once more.
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Whole.');
+        await t.fake.emit('GENERATION_STOPPED');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 2);
+
+        // A stop in a round that wrote nothing saves nothing.
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.emit('GENERATION_STOPPED');
+        await t.fake.receive('alice.png', 'Nobody is away.');
+        await t.fake.emit('GENERATION_STOPPED');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 2);
+    });
+
+    test('saves a reply whose stream errored on a host without the wrapper events', async () => {
+        const t = await setup();
+        delete t.fake.context.eventTypes.GROUP_WRAPPER_STARTED;
+        delete t.fake.context.eventTypes.GROUP_WRAPPER_FINISHED;
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        await t.fake.emit('GENERATION_STARTED', 'normal', {}, false);
+        await t.fake.emit('GENERATION_STOPPED');
+        // No round will flush this later, so the errored reply's note is saved at once.
+        const errored = await t.fake.receive('alice.png', 'Half a');
+        assert.deepEqual(note(t.fake.context.chat[errored]), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 1);
+
+        // The host's own Stop, with no reply: the next generation forgets it and leaves its save to the host.
+        await t.fake.emit('GENERATION_STOPPED');
+        await t.fake.emit('GENERATION_STARTED', 'normal', {}, false);
+        await t.fake.receive('carol.png', 'Whole.');
+        assert.equal(t.fake.saves.length, 1);
+        assert.deepEqual(note(t.fake.context.chat.at(-1)), noted('bob.png'));
+        t.fake.setGenerating(false);
+    });
+
+    test('saves a round whose only write was a join when its stop comes late', async () => {
+        const { fake, recorder } = await setup();
+        await fake.openChat([
+            fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 3000) }),
+            fake.message({ is_user: true, mes: 'Hi.', send_date: iso(START - 2000) }),
+        ], header([]));
+        await fake.addMember('dave.png', { event: false });
+        fake.setGenerating(true);
+        await started(fake);
+        // The reply's join check writes Dave's join to the header; nobody is away, so no note is written.
+        const reply = await fake.receive('alice.png', 'Hi Dave.');
+        assert.equal(note(fake.context.chat[reply]), undefined);
+        assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].joined.map(([avatar]) => avatar), ['dave.png']);
+        assert.equal(fake.saves.length, 0);
+        // The errored stream's stop reaches GCO after the reply: the host saved nothing, so the round does.
+        await fake.emit('GENERATION_STOPPED');
+        fake.setGenerating(false);
+        await finished(fake);
+        assert.equal(fake.saves.length, 1);
+        assert.deepEqual(fake.saves[0].metadata[ROSTER_KEY].joined.map(([avatar]) => avatar), ['dave.png']);
+        assert.equal(recorder.filter(promptOf(fake.context.chat), 'normal', 'dave.png'), 2);
+    });
+
     test('a continue can only shrink away, also when its stream stopped', async () => {
         const t = await setup();
         await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })],
@@ -972,6 +1172,31 @@ describe('scene recorder recording', () => {
         t.fake.settings.update({ scene_history: false });
         await finished(t.fake);
         assert.equal(note(t.fake.context.chat[late]), undefined);
+    });
+
+    test('drops the copied note from a swipe made while scene memory is off', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const id = await t.fake.receive('alice.png', 'First.');
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png'));
+
+        // The host copies the shown version's `extra`, note included, into the generating slot.
+        t.fake.settings.update({ scene_history: false });
+        await t.fake.swipeGenerate(id);
+        assert.equal(note(line), undefined);
+        await t.fake.finishSwipe(id, 'Second, while off.');
+        assert.equal(note(line), undefined);
+        assert.equal(entryNote(line, 1), undefined);
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 0);
+
+        // Back on, the first version still carries its own note and the second has none to hide with.
+        t.fake.settings.update({ scene_history: true });
+        await t.fake.swipeTo(id, 0);
+        assert.deepEqual(note(line), noted('bob.png'));
+        await t.fake.swipeTo(id, 1);
+        assert.equal(note(line), undefined);
     });
 
     test('tolerates messages without extra or swipe_info', async () => {
