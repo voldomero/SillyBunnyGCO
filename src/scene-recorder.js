@@ -203,6 +203,31 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         }
     }
 
+    /**
+     * The host's hide request (GENERATION_HIDE_MESSAGES), asked before it merges retained companion notes: the
+     * lines filter() will blank for this speaker are declared by index, so their notes stay out of the merge
+     * and none of them hosts it. The request's copies are planned over, never changed; true when lines were hidden.
+     */
+    function declare(request, speaker) {
+        try {
+            const items = request?.messages;
+            if (!Array.isArray(items) || typeof request.hide !== 'function') return 0;
+            if (!HIDE_TYPES.has(request.type) || skipReason(speaker)) return 0;
+            const plan = planHidden(items, { speaker, type: request.type, joinTime: joins.joinTime(speaker),
+                timeOf: lineTimes(host.getContext()) });
+            let hidden = 0;
+            for (const [index, rule] of plan.entries()) {
+                if (rule && request.hide(index) === true) hidden++;
+            }
+            setLastError(null);
+            return hidden;
+        } catch (error) {
+            logOnce(FILTER_FAILED, error);
+            setLastError(messageOf(error));
+            return 0;
+        }
+    }
+
     function hiddenFor(avatar) {
         const none = skipped => ({ away: 0, joined: 0, lines: [], skipped });
         try {
@@ -1245,6 +1270,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     return {
         filter,
+        declare,
         hiddenFor,
         status,
         isOmniscient: avatar => omniscientIn(settings.get(), avatar),

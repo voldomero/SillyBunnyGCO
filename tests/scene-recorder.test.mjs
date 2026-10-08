@@ -414,6 +414,100 @@ describe('scene recorder prompt filter', () => {
     });
 });
 
+/** The host's hide request as SillyBunny's GENERATION_HIDE_MESSAGES hands it out: frozen copies, answered by index. */
+function hideRequest(items, type) {
+    const messages = Object.freeze([...items]);
+    const hidden = new Set();
+    const inRange = index => Number.isInteger(index) && index >= 0 && index < messages.length;
+    return { type, messages, hidden,
+        hide(index) { if (!inRange(index)) return false; hidden.add(index); return true; },
+        isHidden(index) { return hidden.has(index); } };
+}
+
+describe('scene recorder hide request', () => {
+    test('declares the same lines filter blanks, by index, and changes nothing', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        live.push(fake.message({ avatar: 'carol.png', mes: 'three', send_date: iso(START), extra: away('bob.png') }));
+        const ignore = fake.context.symbols.ignore;
+
+        for (const type of ['normal', 'swipe', 'continue']) {
+            const blanked = promptOf(live);
+            const count = recorder.filter(blanked, type, 'bob.png');
+            const expected = blanked.flatMap((item, index) => item.extra?.[ignore] ? [index] : []);
+            const request = hideRequest(promptOf(live), type);
+            assert.equal(recorder.declare(request, 'bob.png'), count, type);
+            assert.deepEqual([...request.hidden].sort((a, b) => a - b), expected, type);
+            assert.deepEqual(request.messages, promptOf(live), type);
+        }
+        assert.equal(live[1].mes, 'two');
+        assert.equal(live[1].extra[ignore], undefined);
+
+        for (const seen of ['alice.png', 'carol.png']) {
+            const request = hideRequest(promptOf(live), 'normal');
+            assert.equal(recorder.declare(request, seen), 0, seen);
+            assert.equal(request.hidden.size, 0, seen);
+        }
+    });
+
+    test('declares nothing for prompts, speakers and requests filter would not touch', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        const declares = (request, speaker) => {
+            const count = recorder.declare(request, speaker);
+            assert.equal(request?.hidden?.size ?? 0, count);
+            return count;
+        };
+        const asBob = request => declares(request, 'bob.png');
+
+        for (const type of ['quiet', 'impersonate', undefined]) assert.equal(asBob(hideRequest(promptOf(live), type)), 0, String(type));
+        for (const speaker of [undefined, null, '', 42]) assert.equal(declares(hideRequest(promptOf(live), 'normal'), speaker), 0, String(speaker));
+        for (const request of [undefined, null, {}, { type: 'normal', messages: 'two', hide() {} },
+            { type: 'normal', messages: promptOf(live) }]) {
+            assert.equal(recorder.declare(request, 'bob.png'), 0, JSON.stringify(request));
+        }
+
+        recorder.setOmniscient('bob.png', true);
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        recorder.setOmniscient('bob.png', false);
+        fake.context.extensionSettings.aspect_vocalia = { enabled: true };
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        delete fake.context.extensionSettings.aspect_vocalia;
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 1);
+
+        fake.settings.update({ scene_history: false });
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+        fake.settings.update({ scene_history: true });
+        fake.context.groupId = null;
+        assert.equal(asBob(hideRequest(promptOf(live), 'normal')), 0);
+    });
+
+    test('declares nothing and logs once when planning throws', async () => {
+        const { fake, recorder, logs } = await setup();
+        await openMissed(fake);
+        let notified = 0;
+        recorder.subscribe(() => notified++);
+        const broken = unreadable(new Error('unreadable extra'));
+        const request = hideRequest([...promptOf(fake.context.chat), broken], 'normal');
+
+        assert.equal(recorder.declare(request, 'bob.png'), 0);
+        assert.equal(request.hidden.size, 0);
+        assert.match(recorder.status().lastError, /unreadable extra/);
+        assert.equal(logs.length, 1);
+        assert.equal(notified, 1);
+
+        assert.equal(recorder.declare(hideRequest([...promptOf(fake.context.chat), broken], 'normal'), 'bob.png'), 0);
+        assert.equal(logs.length, 1);
+        assert.equal(notified, 1);
+
+        assert.equal(recorder.declare(hideRequest(promptOf(fake.context.chat), 'normal'), 'bob.png'), 1);
+        assert.equal(recorder.status().lastError, null);
+        assert.equal(notified, 2);
+    });
+});
+
 describe('scene recorder preview and status', () => {
     test('counts hidden lines for the preview by rule', async () => {
         const { fake, recorder } = await setup({ members: WITH_DAVE });
