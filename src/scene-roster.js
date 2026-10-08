@@ -213,6 +213,8 @@ export function reconcileRoster({ stored, groupId, members, cards, founders, rev
         floor = newest === null ? null : toIso(newest);
     }
     const next = makeRoster({ group, since, floor, known, gone, joins });
+    // A roster past the limit would read back as invalid and reset, so nothing is written.
+    if ([next.known, next.gone, next.joined].some(list => list.length > MAX_LIST)) return outcome('guarded');
     const before = new Set([...(previous?.known ?? []), ...(previous?.gone ?? [])]);
     const revealedSet = new Set(revealed);
     return outcome(state, {

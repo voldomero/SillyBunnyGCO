@@ -42,6 +42,15 @@ const DETECT = [
     ['Will walks in.', ['will.png:present']],
     ['Mia Smith walks in.', ['mia1.png:present']],
     ['Bob storms off. Carol steps in.', ['bob.png:absent', 'carol.png:present']],
+    ['Bob walks out of the room.', ['bob.png:absent']],
+    ['Bob storms out of the room.', ['bob.png:absent']],
+    ['Bob steps out of the car.', ['bob.png:absent']],
+    ['Bob heads out of town.', ['bob.png:absent']],
+    ['Bob goes out of the house.', ['bob.png:absent']],
+    ['Bob walks into the room.', ['bob.png:present']],
+    ['Alice steps into the kitchen.', ['alice.png:present']],
+    ['Carol comes into the hall.', ['carol.png:present']],
+    ['Bob returns to the hall.', ['bob.png:present']],
 ];
 
 const IGNORE = [
@@ -56,6 +65,7 @@ const IGNORE = [
     '`Bob leaves`', '[OOC Bob leaves]', '((Bob leaves))', 'I head out.', '*walks out*',
     'Bob had grabbed his coat and left.', 'Bob had already gone and left.', "Bob would've grabbed his coat and left.",
     'Alice, Bob left.', 'Alice, Bob, Carol leave.',
+    'Bob heads to the door.', 'Bob walks to the door.', 'Bob comes out of the room.',
 ];
 
 describe('presence corpus', () => {
@@ -228,6 +238,11 @@ describe('presence detector', () => {
         assert.deepEqual(detect('Bob enters the room.'), ['bob.png:present']);
         assert.deepEqual(detect('Bob leaves for a long time.'), []);
         assert.deepEqual(detect('Bob enters the conversation.'), []);
+        assert.deepEqual(detect('Bob walks out of the old dusty room.'), []);
+        assert.deepEqual(detect('Bob returns to the great hall today.'), []);
+        assert.deepEqual(detect('Bob has walked out of the room, and Alice has stepped into the hall.'),
+            ['bob.png:absent', 'alice.png:present']);
+        assert.deepEqual(detect('*walks out of the room*', { kind: 'character', author: 'carol.png' }), ['carol.png:absent']);
     });
 
     test('limits the subject to four members', () => {

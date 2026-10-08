@@ -61,6 +61,7 @@ const maxFounders = 2000;
 const maxRevealPairs = 500;
 const isAvatar = value => typeof value === 'string' && value.length > 0;
 const isGroupId = value => (typeof value === 'string' && value.length > 0) || Number.isFinite(value);
+const isToken = value => typeof value === 'string' && Number.isFinite(Date.parse(value));
 
 function uniqueAvatars(values, limit = Infinity) {
     const result = [];
@@ -79,9 +80,9 @@ export function memoryOn(settings) {
     return settings?.scene_controls === true && settings?.scene_history === true;
 }
 
-/** Scene memory on with a turn-on token; a missing token counts as off. */
+/** Scene memory on with a turn-on token; a missing or unreadable token counts as off. */
 export function memoryActive(settings) {
-    return memoryOn(settings) && isAvatar(settings.scene_history_since);
+    return memoryOn(settings) && isToken(settings.scene_history_since);
 }
 
 /** Each group's deduplicated raw members at turn-on, keyed by `String(id)`. */
@@ -105,7 +106,7 @@ function mintToken(now, groups) {
 const clearedToken = () => ({ scene_history_since: null, scene_history_founders: null });
 
 /** Copy of a settings patch, plus a new or cleared token when it turns scene memory on or off. */
-export function withMemoryToken(before, patch, { now, groups } = {}) {
+export function withMemoryToken(before, patch, { now = Date.now(), groups = [] } = {}) {
     const next = isRecord(patch) ? { ...patch } : {};
     const wasOn = memoryOn(before);
     const willBeOn = memoryOn({ ...before, ...next });
@@ -115,7 +116,7 @@ export function withMemoryToken(before, patch, { now, groups } = {}) {
 }
 
 /** Patch for settings changed outside the facade (per-tab recovery, SETTINGS_UPDATED), or null. */
-export function alignMemoryToken(settings, { now, groups } = {}) {
+export function alignMemoryToken(settings, { now = Date.now(), groups = [] } = {}) {
     if (memoryOn(settings)) return memoryActive(settings) ? null : mintToken(now, groups);
     if (settings?.scene_history_since != null || settings?.scene_history_founders != null) return clearedToken();
     return null;

@@ -134,6 +134,17 @@ test('rejects forged and oversized records', () => {
         { record: { away: ['bob.png'], moved: [], undone: [] }, invalid: false });
 });
 
+test('treats a hole in a list as invalid', () => {
+    const holed = [];
+    holed[1] = 'bob.png';
+    assert.equal(holed.length, 2);
+    assert.deepEqual(readStored({ v: 1, away: holed }), invalid);
+    assert.deepEqual(readStored({ v: 1, undone: holed }), invalid);
+    const holedMoves = [];
+    holedMoves[1] = ['bob.png', 'present', 'absent'];
+    assert.deepEqual(readStored({ v: 1, moved: holedMoves }), invalid);
+});
+
 test('writes and deletes on extra and the shown swipe entry, replacing the object', () => {
     const message = { mes: 'two', swipe_id: 1, extra: { reasoning: 'r' },
         swipe_info: [{ extra: { reasoning: 'old' } }, { send_date: 'now' }] };
@@ -183,6 +194,38 @@ test('writes away and undone sorted and unique', () => {
     const message = { extra: {} };
     writeRecord(message, { away: ['dave.png', 'bob.png', 'dave.png'], moved: [], undone: ['carol.png', 'alice.png', 'carol.png'] });
     assert.deepEqual(message.extra.sbu_scene, { v: 1, away: ['bob.png', 'dave.png'], undone: ['alice.png', 'carol.png'] });
+});
+
+test('writes only what a reader accepts, losing names but never gaining them', () => {
+    const many = Array.from({ length: 65 }, (_, index) => `member-${String(index).padStart(2, '0')}.png`);
+    const cases = [
+        { away: [...many].reverse() },
+        { undone: many },
+        { moved: many.map(avatar => [avatar, 'present', 'absent']) },
+        { away: ['bob.png', undefined, ''] },
+        { away: ['a'.repeat(256), 'bob.png', null, 42], undone: [{}, 'carol.png'] },
+        { moved: [['bob.png', 'present', 'present'], ['carol.png', 'present', 'absent'], ['', 'absent', 'present'],
+            ['dave.png', 'absent', 'present', 'extra'], 'erin.png', null] },
+    ];
+    const written = cases.map(rec => {
+        const message = { extra: {} };
+        writeRecord(message, rec);
+        const result = readRecord(JSON.parse(JSON.stringify(message.extra)));
+        assert.equal(result.invalid, false, JSON.stringify(rec).slice(0, 80));
+        assert.ok(result.record, JSON.stringify(rec).slice(0, 80));
+        return message.extra.sbu_scene;
+    });
+    assert.deepEqual(written[0], { v: 1, away: many.slice(0, 64) });
+    assert.deepEqual(written[1], { v: 1, undone: many.slice(0, 64) });
+    assert.deepEqual(written[2], { v: 1, moved: many.slice(0, 64).map(avatar => [avatar, 'present', 'absent']) });
+    assert.deepEqual(written[3], { v: 1, away: ['bob.png'] });
+    assert.deepEqual(written[4], { v: 1, away: ['bob.png'], undone: ['carol.png'] });
+    assert.deepEqual(written[5], { v: 1, moved: [['carol.png', 'present', 'absent']] });
+
+    const message = { extra: { sbu_scene: { v: 1, away: ['bob.png'] } }, swipe_id: 0, swipe_info: [{ extra: {} }] };
+    writeRecord(message, { away: ['', undefined], moved: [['bob.png', 'present', 'present']] });
+    assert.equal(Object.hasOwn(message.extra, 'sbu_scene'), false);
+    assert.equal(Object.hasOwn(message.swipe_info[0].extra, 'sbu_scene'), false);
 });
 
 test('knows when a record is empty', () => {
@@ -247,6 +290,17 @@ test('lists who is absent after a line', () => {
         moved: [['carol.png', 'present', 'absent'], ['dave.png', 'absent', 'present']] }), ['bob.png', 'carol.png']);
     assert.deepEqual(absentAfter({ away: [], moved: [], undone: [] }), []);
     assert.deepEqual(absentAfter(null), []);
+});
+
+test('reads moves in order when a line moves one member twice', () => {
+    assert.deepEqual(absentAfter({ away: [], undone: [],
+        moved: [['bob.png', 'absent', 'present'], ['bob.png', 'present', 'absent']] }), ['bob.png']);
+    assert.deepEqual(absentAfter({ away: [], undone: [],
+        moved: [['bob.png', 'present', 'absent'], ['bob.png', 'absent', 'present']] }), []);
+    assert.deepEqual(absentAfter({ away: ['bob.png'], undone: [],
+        moved: [['bob.png', 'absent', 'present'], ['bob.png', 'present', 'absent']] }), ['bob.png']);
+    assert.deepEqual(absentAfter({ away: ['bob.png', 'carol.png'], undone: [],
+        moved: [['bob.png', 'absent', 'present']] }), ['carol.png']);
 });
 
 test('indexes each member\'s latest change', () => {

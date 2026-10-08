@@ -22,7 +22,11 @@ function legalMove(entry) {
 function readList(stored, name, valid) {
     if (!own(stored, name) || stored[name] === undefined) return [];
     const value = stored[name];
-    if (!Array.isArray(value) || value.length < 1 || value.length > MAX_ENTRIES || !value.every(valid)) return null;
+    if (!Array.isArray(value) || value.length < 1 || value.length > MAX_ENTRIES) return null;
+    // By index, because every() skips holes.
+    for (let index = 0; index < value.length; index++) {
+        if (!valid(value[index])) return null;
+    }
     return value;
 }
 
@@ -43,16 +47,19 @@ export function emptyRecord(rec) {
     return !arrayOf(rec?.away).length && !arrayOf(rec?.moved).length && !arrayOf(rec?.undone).length;
 }
 
+// Only what readRecord accepts, at most 64 per list: a note can lose names, never gain them.
 function storedForm(rec) {
     const stored = { v: 1 };
-    const away = sortedUnique(arrayOf(rec.away));
-    const moved = arrayOf(rec.moved).map(entry => [...entry]);
-    const undone = sortedUnique(arrayOf(rec.undone));
+    const away = sortedUnique(arrayOf(rec?.away).filter(isAvatar)).slice(0, MAX_ENTRIES);
+    const moved = arrayOf(rec?.moved).filter(legalMove).slice(0, MAX_ENTRIES).map(entry => [...entry]);
+    const undone = sortedUnique(arrayOf(rec?.undone).filter(isAvatar)).slice(0, MAX_ENTRIES);
     if (away.length) stored.away = away;
     if (moved.length) stored.moved = moved;
     if (undone.length) stored.undone = undone;
     return stored;
 }
+
+const hasLists = stored => Object.keys(stored).length > 1;
 
 function shownEntry(message) {
     const { swipe_info: swipes, swipe_id: swipeId } = message;
@@ -63,7 +70,7 @@ function shownEntry(message) {
 /** Put the note on the line and on its shown swipe entry, or remove it from both when empty. */
 export function writeRecord(message, rec) {
     if (!isRecord(message)) return;
-    const empty = emptyRecord(rec);
+    const empty = !hasLists(storedForm(rec));
     for (const target of [message, shownEntry(message)]) {
         if (!target) continue;
         if (empty) {
@@ -104,11 +111,14 @@ export function computeAway({ absentAt, movers, author }) {
     return sortedUnique([...(absentAt ?? [])].filter(avatar => isAvatar(avatar) && !skip.has(avatar)));
 }
 
+/** Who is absent after the line: its away list, then each move in order. */
 export function absentAfter(rec) {
-    const moved = arrayOf(rec?.moved);
-    const arrivals = new Set(moved.filter(([, , to]) => to === 'present').map(([avatar]) => avatar));
-    const departures = moved.filter(([, , to]) => to === 'absent').map(([avatar]) => avatar);
-    return sortedUnique([...arrayOf(rec?.away), ...departures]).filter(avatar => !arrivals.has(avatar));
+    const absent = new Set(arrayOf(rec?.away));
+    for (const [avatar, , to] of arrayOf(rec?.moved)) {
+        if (to === 'absent') absent.add(avatar);
+        else if (to === 'present') absent.delete(avatar);
+    }
+    return [...absent].sort();
 }
 
 const recordOf = message => isRecord(message) ? readRecord(message.extra).record : null;
@@ -143,7 +153,7 @@ export function revealWalk(chat, avatar) {
     return found;
 }
 
-/** Only the newest visible line counts: a line without a note was written with nobody away. */
+/** Spec §3: only the newest non-system line is read. */
 export function seedFrom(chat) {
     const messages = arrayOf(chat);
     for (let index = messages.length - 1; index >= 0; index--) {

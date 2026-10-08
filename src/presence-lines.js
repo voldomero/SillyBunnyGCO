@@ -9,26 +9,27 @@ const deepFreeze = value => {
 
 export const PRESENCE_WORDS = deepFreeze({
     leads: ['then', 'finally', 'suddenly', 'soon', 'later', 'eventually', 'meanwhile', 'moments later', 'just then'],
+    // `phrases` take one or two words after them and then end the clause: "walks into the room".
     arrivals: [
-        { verb: 'walk', particles: ['in'] },
-        { verb: 'come', particles: ['in', 'back'] },
-        { verb: 'step', particles: ['in'] },
+        { verb: 'walk', particles: ['in'], phrases: ['into'] },
+        { verb: 'come', particles: ['in', 'back'], phrases: ['into'] },
+        { verb: 'step', particles: ['in'], phrases: ['into'] },
         { verb: 'arrive' },
         { verb: 'enter' },
-        { verb: 'return' },
+        { verb: 'return', phrases: ['to'] },
         { verb: 'show', particles: ['up'] },
         { verb: 'join', objects: ['us', 'them', 'the group'] },
         { verb: 'be', particles: ['back', 'here'] },
     ],
     departures: [
         { verb: 'leave' },
-        { verb: 'walk', particles: ['out', 'away'] },
-        { verb: 'step', particles: ['out', 'away'] },
-        { verb: 'head', particles: ['out', 'off', 'home'] },
-        { verb: 'go', particles: ['out', 'home'] },
+        { verb: 'walk', particles: ['out', 'away'], phrases: ['out of'] },
+        { verb: 'step', particles: ['out', 'away'], phrases: ['out of'] },
+        { verb: 'head', particles: ['out', 'off', 'home'], phrases: ['out of'] },
+        { verb: 'go', particles: ['out', 'home'], phrases: ['out of'] },
         { verb: 'exit' },
         { verb: 'depart' },
-        { verb: 'storm', particles: ['out', 'off'] },
+        { verb: 'storm', particles: ['out', 'off'], phrases: ['out of'] },
         { verb: 'disappear' },
         { verb: 'be', particles: ['gone'] },
     ],
@@ -109,7 +110,7 @@ const EMBEDDING = new Set([...SUBORDINATE, ...table.complementizers]);
 const ENTRIES = [
     ...table.arrivals.map(entry => ({ ...entry, to: 'present' })),
     ...table.departures.map(entry => ({ ...entry, to: 'absent' })),
-].map(entry => ({ ...entry, objects: entry.objects?.map(phraseWords) }));
+].map(entry => ({ ...entry, objects: entry.objects?.map(phraseWords), phrases: entry.phrases?.map(phraseWords) }));
 const VERBS = ENTRIES.filter(entry => entry.verb !== 'be');
 const STATES = ENTRIES.filter(entry => entry.verb === 'be');
 // Form slots per subject: one member, several, first person, or a bare verb meaning the author.
@@ -355,6 +356,14 @@ function wordsAt(tokens, at, phrase) {
         ? at + phrase.length : -1;
 }
 
+/** Ends after one or two words starting at `at`, the object of a preposition. */
+function objectEnds(tokens, at) {
+    if (at < 0 || !isFiller(tokens[at])) return [];
+    return isFiller(tokens[at + 1]) ? [at + 1, at + 2] : [at + 1];
+}
+
+const lastClosing = (tokens, ends) => Math.max(-1, ...ends.filter(end => end >= 0 && closes(tokens, end)));
+
 /** Index where the clause may end after an optional tail, or -1. */
 function readTail(tokens, at) {
     const ends = [at];
@@ -363,24 +372,23 @@ function readTail(tokens, at) {
         if (TAILS.has(token.low)) ends.push(at + 1);
         for (const phrase of DOOR_TAILS) ends.push(wordsAt(tokens, at, phrase));
         if (ARTICLES.has(token.low) && isWord(tokens[at + 1], PLACES)) ends.push(at + 2);
-        if (PREPOSITIONS.has(token.low) && isFiller(tokens[at + 1])) {
-            ends.push(at + 2);
-            if (isFiller(tokens[at + 2])) ends.push(at + 3);
-        }
+        if (PREPOSITIONS.has(token.low)) ends.push(...objectEnds(tokens, at + 1));
     }
-    return Math.max(-1, ...ends.filter(end => end >= 0 && closes(tokens, end)));
+    return lastClosing(tokens, ends);
 }
 
 function readComplement(tokens, at, entry) {
+    const phrased = lastClosing(tokens,
+        (entry.phrases ?? []).flatMap(phrase => objectEnds(tokens, wordsAt(tokens, at, phrase))));
     let next = at;
     if (entry.particles) {
-        if (tokens[next]?.type !== 'word' || !entry.particles.includes(tokens[next].low)) return -1;
+        if (tokens[next]?.type !== 'word' || !entry.particles.includes(tokens[next].low)) return phrased;
         next++;
     } else if (entry.objects) {
         next = Math.max(-1, ...entry.objects.map(phrase => wordsAt(tokens, next, phrase)));
-        if (next < 0) return -1;
+        if (next < 0) return phrased;
     }
-    return readTail(tokens, next);
+    return Math.max(phrased, readTail(tokens, next));
 }
 
 /** After "is", "has" or a contracted "'s": a state word or a participle. Returns the new status or null. */

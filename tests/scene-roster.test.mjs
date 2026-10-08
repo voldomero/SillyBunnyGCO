@@ -15,7 +15,7 @@ const said = (avatar, ms, more = {}) => ({ name: avatar, original_avatar: avatar
 const typed = (ms, more = {}) => ({ name: 'User', is_user: true, mes: 'line', send_date: iso(ms), ...more });
 
 /** Alice greets, the user answers, Bob replies: dated T0, T0 + 1 s and T0 + 2 s. */
-const chat = [said('a.png', T0), typed(T0 + 1000), said('b.png', T0 + 2000)];
+const chat = deepFreeze([said('a.png', T0), typed(T0 + 1000), said('b.png', T0 + 2000)]);
 
 function deepFreeze(value) {
     if (value !== null && typeof value === 'object') {
@@ -28,12 +28,19 @@ function deepFreeze(value) {
 const roster = (fields = {}) => ({ v: 1, group: 'g1', since: 'T1', floor: null, known: ['a.png', 'b.png'],
     gone: [], joined: [], ...fields });
 
-/** A check of group g1 under token T1 where every avatar used below has a card. */
-const check = (fields = {}) => reconcileRoster({
-    stored: deepFreeze(roster()), groupId: 'g1', members: ['a.png', 'b.png'],
-    cards: new Set(['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png']), founders: [], reveals: [], chat,
-    since: 'T1', cursor: CURSOR, fromFile: false, now: Infinity, timeOf: read, ...fields,
-});
+/** A check of group g1 under token T1 where every avatar used below has a card. Inputs are frozen. */
+const check = (fields = {}) => {
+    const input = {
+        stored: roster(), groupId: 'g1', members: ['a.png', 'b.png'],
+        cards: new Set(['a.png', 'b.png', 'c.png', 'd.png', 'e.png', 'f.png']), founders: [], reveals: [], chat,
+        since: 'T1', cursor: CURSOR, fromFile: false, now: Infinity, timeOf: read, ...fields,
+    };
+    for (const key of ['stored', 'members', 'founders', 'reveals', 'chat']) deepFreeze(input[key]);
+    return reconcileRoster(input);
+};
+
+const GUARDED = { state: 'guarded', next: null, changed: false, joined: [], founded: [], returned: [],
+    pruned: [], revealed: [], warning: null };
 
 test('names the chat header key', () => {
     assert.equal(ROSTER_KEY, 'sbu_scene_roster');
@@ -86,7 +93,8 @@ test('validates rosters', () => {
     const atLimit = readRoster({ ...valid, known: Array.from({ length: 2000 }, (_, index) => `m${index}.png`), joined: [] });
     assert.equal(atLimit.state, 'valid');
 
-    const { gone: _gone, ...noGone } = valid;
+    const noGone = { ...valid };
+    delete noGone.gone;
     assert.deepEqual(readRoster(noGone).roster.gone, []);
     assert.deepEqual(readRoster({ ...valid, gone: ['b.png', 'z.png'] }).roster.gone, ['z.png']);
     const garbage = { odd: [1, 2] };
@@ -273,11 +281,30 @@ test('caps a join below the member\'s first own line when read from the file', (
 });
 
 test('stops at the guard', () => {
-    const guarded = { state: 'guarded', next: null, changed: false, joined: [], founded: [], returned: [],
-        pruned: [], revealed: [], warning: null };
-    assert.deepEqual(check({ cards: new Set() }), guarded);
-    assert.deepEqual(check({ members: ['a.png', 'b.png', 'nocard.png'] }), guarded);
-    assert.deepEqual(check({ cards: new Set(), stored: roster({ v: 2 }) }), guarded);
+    assert.deepEqual(check({ cards: new Set() }), GUARDED);
+    assert.deepEqual(check({ members: ['a.png', 'b.png', 'nocard.png'] }), GUARDED);
+    assert.deepEqual(check({ cards: new Set(), stored: roster({ v: 2 }) }), GUARDED);
+    assert.deepEqual(check({ groupId: null }), GUARDED);
+    assert.deepEqual(check({ groupId: undefined }), GUARDED);
+    assert.deepEqual(check({ since: '' }), GUARDED);
+    assert.deepEqual(check({ since: 'x'.repeat(256) }), GUARDED);
+    assert.equal(check({ since: 'x'.repeat(255), stored: undefined }).state, 'fresh');
+    assert.equal(check({ cards: ['a.png', 'b.png'] }).state, 'checked');
+});
+
+test('writes nothing when a list would pass 2,000 entries', () => {
+    const crowd = Array.from({ length: 2001 }, (_, index) => `m${index}.png`);
+    const atLimit = crowd.slice(0, 2000);
+    assert.deepEqual(check({ stored: undefined, members: crowd, cards: new Set(crowd) }), GUARDED);
+    assert.equal(check({ stored: undefined, members: atLimit, cards: new Set(atLimit) }).state, 'fresh');
+
+    const full = roster({ known: atLimit });
+    assert.equal(readRoster(full).state, 'valid');
+    assert.deepEqual(check({ stored: full, members: crowd, cards: new Set(crowd) }), GUARDED);
+
+    const strangers = crowd.map((avatar, index) => said(avatar, T0 + index));
+    assert.deepEqual(check({ stored: undefined, chat: strangers }), GUARDED);
+    assert.equal(check({ stored: undefined, chat: strangers.slice(0, 2000) }).state, 'fresh');
 });
 
 test('keeps foreign rosters untouched', () => {

@@ -18,8 +18,9 @@ const now = Date.UTC(2026, 9, 8, 1);
 const token = '2026-10-08T01:00:00.000Z';
 const groups = [{ id: 1759880000000, members: ['a.png', 'b.png', 'a.png', 7] }];
 const snapshotAtToken = { since: token, groups: { 1759880000000: ['a.png', 'b.png'] } };
-const memoryOnSettings = { scene_controls: true, scene_history: true, scene_history_since: 'T0',
-    scene_history_founders: { since: 'T0', groups: {} } };
+const earlier = '2026-10-07T09:30:00.000Z';
+const memoryOnSettings = { scene_controls: true, scene_history: true, scene_history_since: earlier,
+    scene_history_founders: { since: earlier, groups: {} } };
 
 test('adds the six scene memory keys through ensureSettings', () => {
     const stored = ensureSettings({});
@@ -101,6 +102,34 @@ test('tells scene memory on from active', () => {
     assert.equal(memoryActive({ scene_controls: true, scene_history: false, scene_history_since: token }), false);
 });
 
+test('renews a token that is missing, empty or unparsable', () => {
+    const on = { scene_controls: true, scene_history: true };
+    for (const since of [undefined, null, '', 'x', 'T0', 42]) {
+        assert.equal(memoryActive({ ...on, scene_history_since: since }), false, String(since));
+        assert.deepEqual(alignMemoryToken({ ...on, scene_history_since: since }, { now, groups }),
+            { scene_history_since: token, scene_history_founders: snapshotAtToken }, String(since));
+    }
+    assert.equal(memoryActive({ ...on, scene_history_since: earlier }), true);
+});
+
+test('reads the previous state with memoryOn, not memoryActive', () => {
+    const x = { version: 1, chats: {} };
+    const tokenless = { scene_controls: true, scene_history: true, scene_history_since: null };
+    assert.deepEqual(withMemoryToken(tokenless, { current_scenes: x }, { now, groups }), { current_scenes: x });
+});
+
+test('stamps the current time when no clock is given', () => {
+    const before = Date.now();
+    const minted = withMemoryToken({ scene_controls: true, scene_history: false }, { scene_history: true });
+    const aligned = alignMemoryToken({ scene_controls: true, scene_history: true, scene_history_since: null });
+    const after = Date.now();
+    for (const patch of [minted, aligned]) {
+        const time = Date.parse(patch.scene_history_since);
+        assert.ok(time >= before && time <= after, patch.scene_history_since);
+        assert.deepEqual(patch.scene_history_founders, { since: patch.scene_history_since, groups: {} });
+    }
+});
+
 test('caps each founders group at 2000 members', () => {
     const many = Array.from({ length: 2001 }, (_, index) => `m${index}.png`);
     const snapshot = foundersSnapshot([{ id: 'g1', members: ['m0.png', ...many] },
@@ -150,6 +179,11 @@ test('omniscience uses exact avatar keys', () => {
         { scene_omniscient: { 'b.png': true } });
 });
 
+test('drops stored omniscience flags that are not exactly true', () => {
+    assert.deepEqual(omniscientPatch({ scene_omniscient: { 'a.png': 'yes' } }, 'b.png', true),
+        { scene_omniscient: { 'b.png': true } });
+});
+
 test('reads only valid reveal pairs, newest 500', () => {
     const settings = { scene_join_reveals: [['k', 'a.png'], ['k'], ['k', ''], [1, 'b.png'], 'k', null,
         ['k', 'b.png', 'extra'], ['k2', '__proto__']] };
@@ -192,4 +226,32 @@ test('renames omniscience, founders and reveal pairs', () => {
     assert.equal(Object.getPrototypeOf(odd.scene_omniscient), Object.prototype);
     assert.deepEqual(renameMemorySettings({ scene_join_reveals: [['k', '__proto__']] }, '__proto__', 'x.png'),
         { scene_join_reveals: [['k', 'x.png']] });
+});
+
+test('keeps a __proto__ founders group as an own key through a rename', () => {
+    const stored = JSON.parse('{"__proto__":["old.png","b.png"]}');
+    const patch = renameMemorySettings({ scene_history_founders: { since: token, groups: stored } }, 'old.png', 'new.png');
+    const groups = patch.scene_history_founders.groups;
+    assert.ok(Object.hasOwn(groups, '__proto__'));
+    assert.deepEqual(Object.getOwnPropertyDescriptor(groups, '__proto__').value, ['new.png', 'b.png']);
+    assert.equal(Object.getPrototypeOf(groups), Object.prototype);
+});
+
+test('round-trips a non-Latin avatar with a space through omniscience and rename', () => {
+    const settings = {
+        ...omniscientPatch({}, 'Zoë Smith.png', true),
+        scene_history_founders: { since: token, groups: { g1: ['Zoë Smith.png', 'b.png'] } },
+        scene_join_reveals: [['k', 'Zoë Smith.png']],
+    };
+    assert.equal(isOmniscient(settings, 'Zoë Smith.png'), true);
+    assert.equal(isOmniscient(settings, 'Zoë'), false);
+    const patch = renameMemorySettings(settings, 'Zoë Smith.png', 'Élise.png');
+    assert.deepEqual(patch, {
+        scene_omniscient: { 'Élise.png': true },
+        scene_history_founders: { since: token, groups: { g1: ['Élise.png', 'b.png'] } },
+        scene_join_reveals: [['k', 'Élise.png']],
+    });
+    assert.equal(isOmniscient(patch, 'Élise.png'), true);
+    assert.equal(isOmniscient(patch, 'Zoë Smith.png'), false);
+    assert.deepEqual(omniscientPatch(patch, 'Élise.png', false), { scene_omniscient: null });
 });
