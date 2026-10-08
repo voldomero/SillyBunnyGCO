@@ -10,11 +10,11 @@ This project exists to make group chats in [SillyBunny](https://github.com/platb
 
 ### Current scene and optional assistance
 
-- **Group Dynamics → Current scene** now provides opt-in controls for present, absent and remotely connected members. Unspecified is the default. Choices belong to the exact card and conversation, and save through extension settings without writing the transcript.
+- **Group Dynamics → Current scene** now provides opt-in controls for present, absent and remotely connected members. Unspecified is the default. Choices belong to the exact card and conversation, and save through extension settings.
 - Scene restrictions apply to this extension's **Ask** actions, Reply Rules and focus. Membership and mute remain separate. When this extension does not own routing, the host can select replies independently.
 - Optional **Scene suggestions** use an explicitly selected saved connection profile. Chat-completion and text-completion providers supported by SillyBunny's background request service are available, including custom OpenAI-compatible endpoints and local models. Each manual request may cost money. Suggestions require review and one explicit Apply action; they do not select speakers or run automatically.
 - Optional prose styling uses the host's existing quote and emphasis markup. It leaves message text and code unchanged and requires no special model output.
-- **Historical witnesses and knowledge/history filtering are unavailable.** Current scene choices do not establish who witnessed earlier events. Automatic turn suggestions are also unavailable.
+- Optional [**Scene memory**](#scene-memory) hides messages from members who were absent or joined later. Automatic turn suggestions are unavailable.
 
 ### Responder controls and Reply Rules
 
@@ -68,7 +68,7 @@ This is not a direct drop-in zip of the original extensions. It is a compatibili
 
 - The bundled utilities load from one manifest and one extension entry.
 - Member-row controls are coordinated so they do not fight SillyBunny's **Model Override** field.
-- The legacy [SillyTavern-Presence](https://github.com/leandrojofre/SillyTavern-Presence) module is not included. Current-scene controls use extension settings; SillyBunny remains responsible for saving chat transcripts.
+- The legacy [SillyTavern-Presence](https://github.com/leandrojofre/SillyTavern-Presence) module is not included. Current-scene controls use extension settings. Scene memory, when on, also stores small notes in the chat file.
 - Group utility notes are injected through SillyBunny's extension-prompt API instead of mutating the live generation chat array.
 - Group utility settings, group greetings, and SendAs behavior remain available from the bundled extension.
 
@@ -141,15 +141,29 @@ Open **Group Dynamics**, select a card, expand **Current scene**, and enable its
 
 Use **Arrive**, **Depart**, **Connect remotely**, **Disconnect** or **Set absent** as appropriate. **Clear scene state** returns the selected card to unspecified. Turning the feature off removes its restrictions while keeping saved choices.
 
-Scene choices and shared notes stay in SillyBunny's saved settings. Pending edits are also kept in the current browser tab so they can recover after a reload or server restart. Group Dynamics shows whether the server has confirmed the save and offers **Retry saving** if needed. Wait for confirmation before closing the tab or switching devices. Recovery respects newer saved changes; conflicting edits remain available through **Download recovery copy**. Scene choices still belong to their original conversation; a different or renamed chat does not inherit them.
+Scene choices and shared notes stay in SillyBunny's saved settings. Pending edits are also kept in the current browser tab so they can recover after a reload or server restart. Group Dynamics shows whether the server has confirmed the save and offers **Retry saving** if needed. Wait for confirmation before closing the tab or switching devices. Recovery respects newer saved changes; conflicting edits remain available through **Download recovery copy**. Scene choices still belong to their original conversation. A different chat, including a branch or renamed chat, starts unspecified. With scene memory on, members recorded as absent at its newest message start absent instead, with **Undo**.
 
-These controls do not add or remove group members, change mute settings, take over native routing, or alter what any character knows. A quiet member can still be present; selecting a speaker does not change scene state. The controls record current choices, not arrival/departure messages or historical witness events.
+These controls do not add or remove group members, change mute settings or take over native routing. A quiet member can still be present; selecting a speaker does not change scene state. Without scene memory, the controls record current choices only and do not change what any character sees.
 
-Choices save in extension settings under the exact conversation and character-card identity, not in the transcript. Duplicate names remain separate. State for missing or changed card identities is kept without reassignment by name. New chat identities, including new branches, start unspecified; state is not inferred or copied from their transcript. Existing history remains unknown for witness purposes. Unsupported saved scene formats are preserved and editing is gated.
+Choices save in extension settings under the exact conversation and character-card identity, not in the transcript. Duplicate names remain separate. State for missing or changed card identities is kept without reassignment by name. Unsupported saved scene formats are preserved and editing is gated.
 
-### Historical witnesses and knowledge policy
+### Scene memory
 
-Historical witness recording and knowledge/history filtering are **unavailable**. Current-scene choices do not establish what a character witnessed or restrict their access to earlier messages, World Info or other context.
+Enable current-scene controls, then switch on **Scene memory** and, if wanted, **Automatic presence**. Both are off by default.
+
+- **Scene memory**: each new message records who was absent. When a member replies, messages they missed are hidden from their prompt. Members added to the group mid-chat also do not see messages from before they joined, apart from their own. A notice lists them with **Undo**.
+- **Automatic presence**: marks members present or absent from simple English lines such as "Alice walks in." or "Bob heads out." in your messages and replies. Changes in your message apply before anyone replies. Changes in replies wait until the round of replies ends. Applied changes show a notice with **Undo**, and **Latest automatic changes** lists each member's latest change with **Undo**.
+- **Knows everything**: the selected member, such as a narrator, sees every message in every chat.
+- **Show earlier messages**, like **Undo** on the join notice, lets a member added mid-chat see messages from before they joined. Neither can be reversed, even by removing and re-adding the card.
+- **Context preview** shows how many messages are hidden from the selected member, and why.
+
+Limits:
+
+- Messages from before scene memory was on, or written while it was off, are hidden only from members added later.
+- After you rename a card, messages it missed stay hidden from it only in chats where it has written a message.
+- Hidden messages do not count for lorebook (World Info) keyword matching in that reply.
+- Only messages are hidden. Summaries, lorebook entries, macros and other extensions can still reveal what a member missed.
+- If Vocalia's history filter is on, GCO leaves hiding to Vocalia.
 
 ## Optional scene suggestions
 

@@ -1,3 +1,12 @@
+// Siblings load with this module's asset token, as groupUtils.js does, so a GCO update never mixes cached files.
+const sibling = path => {
+    const url = new URL(path, import.meta.url);
+    const token = new URL(import.meta.url).searchParams.get('v') ?? globalThis.window?.SillyBunnyGroupUtilities?.assetToken;
+    if (token) url.searchParams.set('v', token);
+    return url.href;
+};
+const { SCENE_TEXT, textParts } = await import(sibling('./scene-text.js'));
+
 let instance;
 
 function element(tag, className, text) {
@@ -14,7 +23,8 @@ function button(label, onClick, className = '') {
     return node;
 }
 
-export function createMembersPanel({ host, settings, buildPreview, writeAs, askToRespond, getNote, setNote, scene, createSceneControls }) {
+export function createMembersPanel({ host, settings, buildPreview, writeAs, askToRespond, getNote, setNote, scene, sceneMemory,
+    createSceneControls }) {
     if (instance) return instance;
     const panel = element('section', 'sbu-members-panel');
     panel.id = 'sbu-members-panel';
@@ -92,8 +102,11 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const previewText = element('pre', 'sbu-members-preview-text');
     const previewSpeaker = element('p', 'sbu-members-hint');
     const previewWarnings = element('ul', 'sbu-members-preview-warnings');
+    const previewMemory = element('div', 'sbu-members-preview-memory');
+    previewMemory.id = 'sbu-members-preview-memory';
+    previewMemory.hidden = true;
     const refreshPreview = button('Refresh preview', () => renderPreview());
-    preview.append(previewSummary, previewSpeaker, previewStatus, previewText, previewWarnings, refreshPreview);
+    preview.append(previewSummary, previewSpeaker, previewStatus, previewText, previewWarnings, previewMemory, refreshPreview);
     content.append(conversationLabel, saveStatus, retrySave, recoveryCopy, empty, missing, roster, detail, preview, reset);
     panel.append(header, content);
 
@@ -116,11 +129,46 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         return `${conversation?.key ?? ''}\n${selectedAvatar ?? ''}`;
     }
 
+    function hiddenCount(template, count, rule, name) {
+        const line = element('p', 'sbu-members-hint sbu-members-preview-count');
+        line.dataset.rule = rule;
+        line.dataset.count = String(count);
+        line.append(...textParts(template, { n: element('span', 'sbu-members-preview-number', String(count)),
+            name: element('span', 'sbu-members-preview-name', name ?? '') }));
+        return line;
+    }
+
+    /** Lines scene memory hides from this speaker (§8 Preview, §J.6): counts by rule and the newest few excerpts. */
+    function renderMemory(memory, speaker) {
+        previewMemory.replaceChildren();
+        previewMemory.hidden = !memory || Boolean(memory.skipped);
+        if (previewMemory.hidden) {
+            delete previewMemory.dataset.count;
+            return;
+        }
+        previewMemory.dataset.count = String(memory.away);
+        const name = speaker?.name ?? speaker?.avatar;
+        previewMemory.append(hiddenCount(SCENE_TEXT.P10, memory.away, 'away', name));
+        if (memory.joined > 0) previewMemory.append(hiddenCount(SCENE_TEXT.P26, memory.joined, 'joined', name));
+        if (!memory.lines?.length) return;
+        const lines = element('ul', 'sbu-members-preview-lines');
+        for (const { index, rule, excerpt } of memory.lines) {
+            const item = element('li');
+            item.dataset.index = String(index);
+            item.dataset.rule = rule;
+            item.append(element('span', 'sbu-members-preview-prefix', SCENE_TEXT.P10line), ' ',
+                element('span', 'sbu-members-preview-index', `#${index}`), ' ', element('span', 'sbu-members-preview-excerpt', excerpt));
+            lines.append(item);
+        }
+        previewMemory.append(lines);
+    }
+
     async function renderPreview() {
         const token = ++revision;
         previewText.textContent = '';
         previewSpeaker.textContent = '';
         previewWarnings.replaceChildren();
+        renderMemory(null);
         if (!opened || !conversation?.group || !preview.open) return;
         previewStatus.textContent = 'Building preview…';
         try {
@@ -133,6 +181,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
             for (const omission of result.omissions ?? []) {
                 previewWarnings.append(element('li', '', `${omission.name || 'Character'}: ${omission.reason}`));
             }
+            renderMemory(result.memory, result.speaker);
         } catch (error) {
             if (destroyed || !opened || token !== revision) return;
             previewStatus.textContent = 'Could not build the context preview.';
@@ -272,6 +321,8 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
             throw error;
         }
         if (destroyed || !opened) { shell.hide(); return; }
+        // The scene section skips its chat scans while the panel is hidden; it is shown now.
+        sceneControls?.refresh();
         title.focus({ preventScroll: true });
     }
 
@@ -344,7 +395,7 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
     const api = { element: panel, open, close, toggle, refresh, destroy };
     try {
         if (scene && createSceneControls) {
-            const controls = createSceneControls({ scene, getSelectedAvatar: () => selectedAvatar });
+            const controls = createSceneControls({ scene, sceneMemory, settings, getSelectedAvatar: () => selectedAvatar });
             detail.prepend(controls.element);
             cleanups.push(() => controls.destroy());
             cleanups.push(scene.subscribe(refresh));
