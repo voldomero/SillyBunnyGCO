@@ -201,6 +201,20 @@ test('starts over after an import into another group', () => {
     assert.equal(joinWindowFor(result.next, 'b.png'), undefined);
 });
 
+test('an earlier author of a chat imported into another group joins it later as a newcomer', () => {
+    const history = deepFreeze([...chat, said('c.png', T0 + 3000), said('q.png', T0 + 4000)]);
+    const stored = roster({ group: 'g0', known: ['a.png', 'b.png', 'c.png', 'q.png'] });
+    const imported = check({ stored: deepFreeze(stored), chat: history });
+    assert.equal(imported.state, 'fresh');
+    assert.deepEqual(imported.next.known, ['a.png', 'b.png']);
+    assert.deepEqual(imported.next.gone, []);
+    assert.deepEqual(imported.founded, ['a.png', 'b.png']);
+
+    const added = check({ stored: imported.next, members: ['a.png', 'b.png', 'c.png'], chat: history });
+    assert.deepEqual(added.joined, ['c.png']);
+    assert.deepEqual(added.next.joined, [['c.png', iso(CURSOR)]]);
+});
+
 test('rebuilds when the token changed', () => {
     const stored = roster({ since: 'T0', floor: 'old floor', known: ['a.png', 'b.png', 'd.png', 'z.png'],
         gone: ['c.png'], joined: [['d.png', iso(T0)], ['z.png', iso(T0)]] });

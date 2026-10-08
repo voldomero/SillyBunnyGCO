@@ -177,7 +177,9 @@ export function reconcileRoster({ stored, groupId, members, cards, founders, rev
         }
     } else {
         const seen = new Set(textSet(founders));
-        for (const line of Array.isArray(chat) ? chat : []) {
+        // Authors of a chat imported from another group never belonged to this one.
+        const imported = Boolean(roster) && roster.group !== group;
+        for (const line of !imported && Array.isArray(chat) ? chat : []) {
             const author = authorOf(line);
             if (author !== undefined) seen.add(author);
         }
