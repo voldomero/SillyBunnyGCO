@@ -11,7 +11,7 @@ import { createFakeHost } from './helpers/fake-host.mjs';
 const START = Date.UTC(2026, 9, 8, 1, 0, 0);
 const iso = ms => new Date(ms).toISOString();
 const note = line => line?.extra?.sbu_scene;
-const applied = { level: 'info', text: SCENE_TEXT.P11 };
+const applied = { level: 'info', text: SCENE_TEXT.P11, actionLabel: SCENE_TEXT.P12, onAction: 'function' };
 const wrapper = (fake, name, type = 'normal') => fake.emit(name, { selected_group: 'g1', type });
 // Request timeouts work as usual, but a failed test does not keep the run open until they fire.
 const setTimer = (callback, ms) => {
@@ -87,7 +87,7 @@ describe('scene memory around routed turns', () => {
         const turn = t.lease.route('Alice walks in. Hi Alice');
         assert.deepEqual(turn.plan?.avatars, ['alice.png']);
         assert.equal(t.statusOf('alice.png'), 'present');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
 
         t.fake.setGenerating(true);
         const id = await t.fake.sendUser('Alice walks in. Hi Alice');
@@ -104,7 +104,7 @@ describe('scene memory around routed turns', () => {
         await wrapper(t.fake, 'GROUP_WRAPPER_FINISHED');
         assert.equal(t.statusOf('alice.png'), 'present');
         assert.deepEqual(t.lease.cancelled, []);
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
     });
 
     test('queues a departure in a reply and applies it after the round', async () => {
@@ -131,12 +131,12 @@ describe('scene memory around routed turns', () => {
         assert.equal(turn.plan.isCurrent(), true);
         turn.finish();
         assert.equal(t.statusOf('bob.png'), 'unspecified');
-        assert.deepEqual(t.fake.toasts, []);
+        assert.deepEqual(t.fake.shownToasts(), []);
 
         t.fake.setGenerating(false);
         await wrapper(t.fake, 'GROUP_WRAPPER_FINISHED');
         assert.equal(t.statusOf('bob.png'), 'absent');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
         assert.deepEqual(t.lease.cancelled, []);
     });
 
@@ -156,7 +156,7 @@ describe('scene memory around routed turns', () => {
         assert.equal(result.status, 'returned');
         assert.deepEqual(duringAsk, ['unspecified']);
         assert.equal(t.statusOf('bob.png'), 'absent');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
     });
 
     test('declines a plan whose staged member just left', async () => {
@@ -177,7 +177,7 @@ describe('scene memory around routed turns', () => {
         t.fake.setGenerating(false);
         await wrapper(t.fake, 'GROUP_WRAPPER_FINISHED');
         assert.equal(t.statusOf('bob.png'), 'absent');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
     });
 
     test('clears the staged pick when its member\'s departure applies at the round end', async () => {

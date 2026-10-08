@@ -109,4 +109,14 @@ describe('scene memory host helpers', () => {
         assert.equal(undone, 1);
         assert.doesNotThrow(() => adapterFor(createContext()).toast({ text: 'no toastr' }));
     });
+
+    test('shows an escaped toast detail in its own element after the text', () => {
+        const shown = [];
+        const toastr = { warning: html => { shown.push(html); return {}; } };
+        const host = createHostAdapter({ getContext: () => createContext(), document: { defaultView: { toastr } } });
+        host.toast({ level: 'warning', text: 'Joined', detail: '<i>Dave</i> (3)', actionLabel: 'Undo', onAction: () => {} });
+        host.toast({ level: 'warning', text: 'Plain' });
+        assert.match(shown[0], /^Joined <span class="sbu-toast-detail">&lt;i&gt;Dave&lt;\/i&gt; \(3\)<\/span> <button/);
+        assert.equal(shown[1], 'Plain');
+    });
 });

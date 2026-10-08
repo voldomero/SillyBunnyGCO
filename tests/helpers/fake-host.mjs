@@ -105,7 +105,13 @@ export async function createFakeHost({
         importModule: async () => ({ isGenerating: () => isGenerating }),
     });
     await host.prepareSuggestionSupport();
-    host.toast = options => { toasts.push(options); };
+    // A toast's action is readable but not enumerable, so a toast still deep-equals its level and text.
+    host.toast = ({ actionLabel, onAction, ...shown } = {}) => {
+        if (actionLabel !== undefined || onAction !== undefined) {
+            Object.defineProperties(shown, { actionLabel: { value: actionLabel }, onAction: { value: onAction } });
+        }
+        toasts.push(shown);
+    };
     const settings = createSettings({
         scene_controls: true,
         scene_history: true,
@@ -168,6 +174,9 @@ export async function createFakeHost({
         group,
         emit,
         message,
+        /** The toasts with each action made visible, so a deep comparison also checks whether a toast offers one. */
+        shownToasts: () => toasts.map(toast => Object.hasOwn(toast, 'onAction')
+            ? { ...toast, actionLabel: toast.actionLabel, onAction: typeof toast.onAction } : { ...toast }),
         setGenerating(value) { isGenerating = value; },
         /** Replace the chat and header with new objects, as a load does, then announce it. */
         async openChat(messages = [], metadata = { integrity: 'fake-integrity' }) {
@@ -269,6 +278,18 @@ export async function createFakeHost({
             if (streaming) syncShown(line);
             if (emitEvent) await emit('MESSAGE_RECEIVED', id, 'continue');
             if (!streaming) syncShown(line);
+        },
+        /** The host's message edit: the shown text changes in the line and its version (MESSAGE_EDITED). */
+        async editLine(id, mes) {
+            const line = context.chat[id];
+            line.mes = mes;
+            if (Array.isArray(line.swipes) && Number.isInteger(line.swipe_id)) line.swipes[line.swipe_id] = mes;
+            await emit('MESSAGE_EDITED', id);
+        },
+        /** The host's deleteMessage: the line goes, then MESSAGE_DELETED with the new chat length. */
+        async deleteLine(id) {
+            context.chat.splice(id, 1);
+            await emit('MESSAGE_DELETED', context.chat.length);
         },
         /** Add a card (when missing) and a member; GROUP_UPDATED is emitted unless `event` is false. */
         async addMember(avatar, { event = true } = {}) {

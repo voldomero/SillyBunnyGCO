@@ -243,14 +243,15 @@ export function createHostAdapter({
         return typeof save === 'function' ? save(options) : undefined;
     }
 
-    function toast({ level = 'info', text, actionLabel, onAction, timeOut = 8000 } = {}) {
+    function toast({ level = 'info', text, detail, actionLabel, onAction, timeOut = 8000 } = {}) {
         const toastr = view?.toastr ?? globalThis.toastr;
         const show = typeof toastr?.[level] === 'function' ? toastr[level] : toastr?.info;
         if (typeof show !== 'function') return;
         let acted = false;
         const action = actionLabel && typeof onAction === 'function'
             ? ` <button type="button" class="sbu-toast-action menu_button">${escapeHtml(actionLabel)}</button>` : '';
-        show.call(toastr, `${escapeHtml(text)}${action}`, '', {
+        const extra = detail ? ` <span class="sbu-toast-detail">${escapeHtml(detail)}</span>` : '';
+        show.call(toastr, `${escapeHtml(text)}${extra}${action}`, '', {
             escapeHtml: false, timeOut, extendedTimeOut: timeOut, tapToDismiss: !action, closeButton: Boolean(action),
             onclick: event => {
                 if (acted || !action || !event?.target?.closest?.('.sbu-toast-action')) return;

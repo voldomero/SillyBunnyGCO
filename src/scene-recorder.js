@@ -9,7 +9,7 @@ const [
     { isOmniscient: omniscientIn, memoryActive, memoryOn, omniscientPatch },
     {
         HIDE_TYPES, RECORD_KEY, authorOf, blankItems, computeAway, countHidden, planHidden, readRecord, resolveChange,
-        seedFrom, stripRecord, writeRecord,
+        revealWalk, seedFrom, stripRecord, writeRecord,
     },
     { timeOf: readTime },
     { createChatSaver, isEmptySlot },
@@ -63,6 +63,25 @@ const kindOf = message => message.is_user ? 'user'
     : isRecord(message.extra) && message.extra.type === 'narrator' ? 'narrator' : 'character';
 const absentIn = status => [...status].filter(([, value]) => value === 'absent').map(([avatar]) => avatar);
 const statusesOf = snapshot => new Map(snapshot.participants.map(member => [member.avatar, member.status]));
+const blankRecord = () => ({ away: [], moved: [], undone: [] });
+// Undo attempts report '' when they took a change back, else why not.
+const UNDO_DONE = Object.freeze({ reason: '', wrote: false });
+const UNDO_GONE = Object.freeze({ reason: 'gone', wrote: false });
+const UNDO_OFF = Object.freeze({ reason: 'off', wrote: false });
+
+/** A change id from getChanges: [line serial, version, avatar, direction]; null when malformed. */
+function parseChangeId(id) {
+    let parts;
+    try {
+        parts = typeof id === 'string' ? JSON.parse(id) : null;
+    } catch {
+        return null;
+    }
+    if (!Array.isArray(parts) || parts.length !== 4) return null;
+    const [serial, version, avatar, to] = parts;
+    return Number.isInteger(serial) && Number.isInteger(version) && isAvatar(avatar) && (to === 'present' || to === 'absent')
+        ? { serial, version, avatar, to } : null;
+}
 
 // The entry writeRecord mirrors into.
 function mirrorOf(message) {
@@ -97,6 +116,15 @@ const lineTimes = context => {
     return value => readTime(value, parse);
 };
 
+/** The last line dated at or before a join, whichever rule keeps or hides it; null when there is none (§J.6). */
+function lastLineBefore(chat, joinedAt, timeOf) {
+    for (let index = chat.length - 1; index >= 0; index--) {
+        const message = chat[index];
+        if (recordable(message) && timeOf(message.send_date) <= joinedAt) return index;
+    }
+    return null;
+}
+
 /**
  * Scene memory for the open group chat: notes on new lines, automatic presence and its timing, the join check,
  * the prompt filter, preview counts and status.
@@ -112,6 +140,15 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     let adoptedKey;
     let serial = 0;
     const serials = new WeakMap();
+    // The latest-change index (§7): each member's latest applied change in the open chat, and what views last saw of it.
+    let indexed = null;
+    let indexSignature;
+    // Manual-change tracking (§7): the statuses last seen, members someone else moved in each chat (until a
+    // reload), and the recorder's own writes.
+    let tracked = null;
+    let writing = 0;
+    const manual = new Set();
+    const markOf = (key, avatar) => JSON.stringify([key, avatar]);
     const logged = new Set();
     const listeners = new Set();
     const warnedNotes = new Set();
@@ -236,40 +273,108 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     const detectLine = (message, live) => detectIn(message.mes, live, { kind: kindOf(message), author: authorOf(message) });
     const deferring = () => round !== null || holds > 0;
     const queueOf = live => pending?.key === live.key ? pending.queue : [];
+    const statusNow = avatar => statusesOf(scene.getSnapshot()).get(avatar);
 
+    // `undone`: members whose planned change was undone before the user's line carried it.
     function batchFor(key) {
-        if (pending?.key !== key) pending = { key, queue: [], planned: [] };
+        if (pending?.key !== key) pending = { key, queue: [], planned: [], undone: [] };
         return pending;
+    }
+
+    /** Every live change the recorder makes goes through here, so manual-change tracking can tell it apart. */
+    function setLive(avatar, status, key) {
+        writing++;
+        let result;
+        try {
+            result = scene.setState(avatar, status, key);
+        } finally {
+            writing--;
+        }
+        if (result.ok) manual.delete(markOf(key, avatar));
+        return result;
+    }
+
+    /** Scene notifications: a status the recorder did not set marks that member as changed by hand (§7). */
+    function track() {
+        if (destroyed) return;
+        try {
+            const snapshot = scene.getSnapshot();
+            const status = statusesOf(snapshot);
+            // Another chat's statuses are no baseline for this one.
+            if (tracked?.key === snapshot.key && !writing) {
+                for (const [avatar, value] of status) {
+                    if (tracked.status.has(avatar) && tracked.status.get(avatar) !== value) {
+                        manual.add(markOf(snapshot.key, avatar));
+                    }
+                }
+            }
+            tracked = { key: snapshot.key, status };
+        } catch (error) {
+            logOnce(EVENT_FAILED, error);
+        }
     }
 
     /**
      * Each member's status before the next line: the live scene with queued changes applied in order (§6), and
-     * for each member the queued change that set it.
+     * for each member the queued change that set it. A queued restore (Undo or a take-back) applies where the
+     * status is still the one it undoes.
      */
     function overlayOf(live) {
         const status = statusesOf(live);
         const latest = new Map();
         for (const change of queueOf(live)) {
-            const { avatar, to } = change;
-            if (!status.has(avatar) || !resolveChange(status.get(avatar), to)) continue;
+            const { avatar, from, to } = change;
+            if (!status.has(avatar)) continue;
+            if (change.restore) {
+                if (status.get(avatar) !== from) continue;
+                status.set(avatar, to);
+                latest.delete(avatar);
+                continue;
+            }
+            if (!resolveChange(status.get(avatar), to)) continue;
             status.set(avatar, to);
             latest.set(avatar, change);
         }
         return { status, latest };
     }
 
-    /** Apply changes in order where each member's live status still allows it; one toast per applied batch. */
+    /**
+     * Apply changes in order where each member's live status still allows it. Each applied batch shows one toast
+     * whose Undo takes the whole batch back; restores apply silently where the status is still the one they undo.
+     */
     function apply(changes, key) {
         const status = statusesOf(scene.getSnapshot());
         const done = [];
         for (const change of changes) {
-            const allowed = status.has(change.avatar) && resolveChange(status.get(change.avatar), change.to);
-            if (!allowed || !scene.setState(change.avatar, change.to, key).ok) continue;
-            status.set(change.avatar, change.to);
+            const { avatar, from, to } = change;
+            if (change.restore) {
+                if (status.get(avatar) === from && setLive(avatar, to, key).ok) status.set(avatar, to);
+                continue;
+            }
+            const allowed = status.has(avatar) && resolveChange(status.get(avatar), to);
+            if (!allowed || !setLive(avatar, to, key).ok) continue;
+            status.set(avatar, to);
             done.push({ change, from: allowed.from });
         }
-        if (done.length) host.toast({ level: 'info', text: SCENE_TEXT.P11 });
+        if (done.length) {
+            host.toast({ level: 'info', text: SCENE_TEXT.P11, actionLabel: SCENE_TEXT.P12,
+                onAction: () => undoChanges(done.map(({ change }) => change)) });
+        }
         return done;
+    }
+
+    /**
+     * Put a member back to `target` where the live status is still `expect`: now, or at the drain (§6, §7). What
+     * it takes back came before every queued change, so it waits ahead of that member's first one.
+     */
+    function restoreLive(avatar, expect, target, key) {
+        if (deferring()) {
+            const { queue } = batchFor(key);
+            const at = queue.findIndex(change => !change.restore && change.avatar === avatar);
+            queue.splice(at < 0 ? queue.length : at, 0, { restore: true, avatar, from: expect, to: target });
+            return true;
+        }
+        return statusNow(avatar) === expect && setLive(avatar, target, key).ok;
     }
 
     /**
@@ -308,6 +413,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             ? readRecord(message.extra).record : null;
         let wrote = false;
         for (const change of changes) {
+            if (change.restore) continue;
             const { avatar, to, message, hid } = change;
             const own = recordOn(change);
             const moved = own?.moved.filter(([mover, , result]) => mover !== avatar || result !== to);
@@ -352,11 +458,32 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         if (invalid) warnNote();
     }
 
-    /** The join check, with its roster warning shown; returns the save it asks for. */
+    /** The join toast's newcomers: each one's scene name and how many earlier lines the join hides from them. */
+    function joinDetail(avatars) {
+        try {
+            const context = host.getContext();
+            const timeOf = lineTimes(context);
+            const names = new Map(scene.getSnapshot().participants.map(member => [member.avatar, member.name]));
+            return avatars.map(avatar => {
+                const { joined } = countHidden(context.chat, { speaker: avatar, joinTime: joins.joinTime(avatar), timeOf });
+                return `${names.get(avatar) ?? avatar} (${joined})`;
+            }).join(', ');
+        } catch (error) {
+            logOnce(PREVIEW_FAILED, error);
+            return undefined;
+        }
+    }
+
+    /** The join check, with its roster warning and its newcomers shown (§J.8); returns the save it asks for. */
     function checkJoins(trigger, details) {
-        const { save, warning } = joins.check(trigger, details);
+        const { save, warning, announce } = joins.check(trigger, details);
         if (warning === 'invalid' || warning === 'foreign') {
             host.toast({ level: 'warning', text: warning === 'invalid' ? SCENE_TEXT.P27 : SCENE_TEXT.P28 });
+        }
+        if (announce.length) {
+            const key = host.activeConversation()?.key;
+            host.toast({ level: 'info', text: SCENE_TEXT.P25, detail: joinDetail(announce), actionLabel: SCENE_TEXT.P12,
+                onAction: () => forgetJoins(announce, key) });
         }
         return save;
     }
@@ -379,19 +506,20 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     /**
      * Note a new line or version against the overlay (§4): the planned changes it carries, then those its text
-     * makes when `detected`. Its own changes apply now or wait for the drain.
+     * makes when `detected`, except for members whose planned change was undone. Its own changes apply now or
+     * wait for the drain.
      */
-    function noteFresh(message, live, { detected = true, planned = [], target = round } = {}) {
+    function noteFresh(message, live, { detected = true, planned = [], undone = [], target = round } = {}) {
         const { status, latest } = overlayOf(live);
         const moved = planned.map(({ avatar, from, to }) => [avatar, from, to]);
         for (const { avatar, to } of detected ? detectLine(message, live) : []) {
-            if (!status.has(avatar) || moved.some(([mover]) => mover === avatar)) continue;
+            if (!status.has(avatar) || undone.includes(avatar) || moved.some(([mover]) => mover === avatar)) continue;
             const change = resolveChange(status.get(avatar), to);
             if (change) moved.push([avatar, change.from, change.to]);
         }
         const away = computeAway({ absentAt: absentIn(status), movers: moved.map(([avatar]) => avatar),
             author: authorOf(message) });
-        const changed = noteLine(message, { away, moved, undone: [] }, target);
+        const changed = noteLine(message, { away, moved, undone }, target);
         for (const avatar of away) {
             const hider = latest.get(avatar);
             if (hider?.to === 'absent') hider.hid.push({ message, version: versionOf(message) });
@@ -465,6 +593,25 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         saver.adopt();
     }
 
+    /**
+     * A branch, import or renamed chat has no scene entry of its own yet: the members absent after its newest
+     * recorded line start absent, with Undo (§3). The join roster plays no part.
+     */
+    function seed(live) {
+        const chats = settings.get().current_scenes?.chats;
+        if (!live || (isRecord(chats) && Object.hasOwn(chats, live.key))) return;
+        const before = statusesOf(live);
+        const seeded = [];
+        for (const avatar of seedFrom(chatOf()) ?? []) {
+            if (!before.has(avatar) || before.get(avatar) === 'absent') continue;
+            if (setLive(avatar, 'absent', live.key).ok) seeded.push([avatar, before.get(avatar)]);
+        }
+        if (!seeded.length) return;
+        host.toast({ level: 'info', text: SCENE_TEXT.P13, actionLabel: SCENE_TEXT.P12,
+            onAction: () => undoBatch(seeded.map(([avatar, status]) => () => liveScene()?.key === live.key
+                && restoreLive(avatar, 'absent', status, live.key) ? UNDO_DONE : UNDO_GONE)) });
+    }
+
     // setState refuses a stale key, so what waits for the old chat is dropped (§12).
     function chatChanged() {
         checkJoins('CHAT_CHANGED');
@@ -474,7 +621,11 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         saver.reset();
         setLastError(null);
         read = new WeakMap();
-        readAll(liveScene());
+        indexed = null;
+        track();
+        const live = liveScene();
+        readAll(live);
+        seed(live);
         if (dropped) notify();
     }
 
@@ -491,7 +642,10 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             // The routed plan's changes belong to the user's line it planned for (§6).
             const carries = !inserted && recordable(message) && message.is_user && !isRead(message)
                 && pending?.key === live.key;
-            wrote = recordNew(index, live, { planned: carries ? pending.planned.splice(0) : [] });
+            const planned = carries ? pending.planned.splice(0) : [];
+            // A toast's Undo finds a planned change on the line that carries it from now on.
+            for (const change of planned) Object.assign(change, { message, version: versionOf(message) });
+            wrote = recordNew(index, live, { planned, undone: carries ? pending.undone.splice(0) : [] });
         }
         await persist(strongest(intent, wrote ? createdSave(inserted) : null));
     }
@@ -522,7 +676,15 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         await persist(save);
     }
 
+    /** A read version shown again on the newest line: its stored changes apply where the live status allows (§4). */
+    function reapply(message, live) {
+        const { record } = readRecord(message.extra);
+        if (record?.moved.length && detecting()) settle(message, record.moved, live, new Map());
+    }
+
     function messageSwiped(id) {
+        // The old version's change is taken back first, so the version now shown meets the scene without it.
+        withdraw();
         const live = liveScene();
         const chat = chatOf();
         const index = Number(id);
@@ -534,8 +696,10 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             read.get(message)?.delete(versionOf(message));
             return;
         }
+        if (index !== chat.length - 1 || !recordable(message)) return;
         // n>1 alternatives and /swipes-add versions are read when first shown on the newest line.
-        if (index === chat.length - 1 && recordable(message) && !isRead(message)) noteFresh(message, live);
+        if (isRead(message)) reapply(message, live);
+        else noteFresh(message, live);
     }
 
     /** deleteSwipe renumbers the versions above the deleted one (script.js:15448-15466). */
@@ -543,10 +707,52 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         if (!isRecord(details)) return;
         const { messageId, swipeId } = details;
         const message = chatOf()[Number(messageId)];
-        const seen = isRecord(message) ? read.get(message) : undefined;
-        if (!seen || !Number.isInteger(swipeId) || swipeId < 0) return;
-        read.set(message, new Set([...seen].filter(version => version !== swipeId)
-            .map(version => version > swipeId ? version - 1 : version)));
+        if (!isRecord(message) || !Number.isInteger(swipeId) || swipeId < 0) return;
+        const renumber = version => version > swipeId ? version - 1 : version;
+        const seen = read.get(message);
+        if (seen) read.set(message, new Set([...seen].filter(version => version !== swipeId).map(renumber)));
+        // A change on the deleted version no longer counts as shown, so the swipe that follows takes it back.
+        for (const ref of indexed?.latest.values() ?? []) {
+            if (ref.message === message) ref.version = ref.version === swipeId ? -1 : renumber(ref.version);
+        }
+    }
+
+    /**
+     * Edit rules (§4): changes the text no longer makes leave the note and are taken back if latest; on the
+     * newest line only, changes it now makes are added. The host saves right after the event.
+     */
+    function messageEdited(id) {
+        const live = liveScene();
+        const chat = chatOf();
+        const index = Number(id);
+        const message = chat[index];
+        const editable = live !== null && detecting() && recordable(message) && isRead(message);
+        const { record, invalid } = editable ? readRecord(message.extra) : { record: null, invalid: false };
+        if (invalid) warnNote();
+        const base = record ?? blankRecord();
+        const found = editable && !invalid ? detectLine(message, live) : [];
+        const makes = (avatar, to) => found.some(change => change.avatar === avatar && change.to === to);
+        const moved = base.moved.filter(([avatar, , to]) => makes(avatar, to));
+        if (moved.length < base.moved.length) {
+            writeNote(message, { ...base, moved });
+            notify();
+        }
+        withdraw();
+        // Read against the scene after the take-back above, as a Continue reads its line.
+        const current = liveScene();
+        if (!found.length || index !== chat.length - 1 || !current) return;
+        const { status, latest } = overlayOf(current);
+        const added = [];
+        for (const { avatar, to } of found) {
+            if (!status.has(avatar) || base.undone.includes(avatar)
+                || moved.some(([mover, , result]) => mover === avatar && result === to)) continue;
+            const change = resolveChange(status.get(avatar), to);
+            if (change) added.push([avatar, change.from, change.to]);
+        }
+        if (!added.length) return;
+        const movers = new Set(added.map(([avatar]) => avatar));
+        writeNote(message, { ...base, away: base.away.filter(avatar => !movers.has(avatar)), moved: [...moved, ...added] });
+        settle(message, added, current, latest);
     }
 
     /** The sweep and copy stripping need the chat as it was at the start; that is read only while `recording`. */
@@ -583,8 +789,9 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             const live = liveScene();
             if (!live || live.key !== key || typeof text !== 'string' || !detecting()) return;
             round ??= newRound(live.key, 'normal', false);
-            const done = apply(detectIn(text, live, { kind: 'user' }), key);
-            batchFor(key).planned.push(...done.map(({ change: { avatar, to }, from }) => ({ avatar, from, to })));
+            const done = apply(detectIn(text, live, { kind: 'user' }).map(({ avatar, to }) => ({ avatar, to })), key);
+            // The toast's Undo holds these same objects, so it finds them on the user's line once it is sent.
+            batchFor(key).planned.push(...done.map(({ change, from }) => Object.assign(change, { from })));
         } catch (error) {
             logOnce(EVENT_FAILED, error);
         }
@@ -598,7 +805,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     /**
      * After the round and every hold: planned changes no line carried go back, then queued ones apply (§6); the
-     * rest are discarded. True when a note changed.
+     * rest are discarded. Queued restores from Undo and take-backs apply with automatic presence off too. True
+     * when a note changed.
      */
     function drain() {
         if (round || holds > 0 || !pending) return false;
@@ -607,13 +815,15 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         let wrote = false;
         try {
             const live = liveScene();
-            let dropped = batch.queue;
-            if (live?.key === batch.key && detecting()) {
-                for (const { avatar, from, to } of batch.planned) {
-                    if (statusesOf(scene.getSnapshot()).get(avatar) === to) scene.setState(avatar, from, batch.key);
+            const automatic = detecting();
+            let dropped = batch.queue.filter(change => !change.restore);
+            if (live?.key === batch.key) {
+                for (const { avatar, from, to } of automatic ? batch.planned : []) {
+                    if (statusNow(avatar) === to) setLive(avatar, from, batch.key);
                 }
-                const done = new Set(apply(batch.queue.filter(stillListed), batch.key).map(({ change }) => change));
-                dropped = batch.queue.filter(change => !done.has(change));
+                const due = batch.queue.filter(change => change.restore || (automatic && stillListed(change)));
+                const done = new Set(apply(due, batch.key).map(({ change }) => change));
+                dropped = dropped.filter(change => !done.has(change));
             }
             wrote = discard(dropped);
         } catch (error) {
@@ -633,6 +843,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             held = false;
             holds--;
             if (drain()) persistLater();
+            reindex();
         };
     }
 
@@ -684,16 +895,40 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             }
         } finally {
             round = null;
-            if (drain()) saver.markUnsaved();
+            const drained = drain();
+            if (withdraw() || drained) saver.markUnsaved();
             await saver.flush();
         }
     }
 
     // A change is named by its line object, which outlives the index shifts of deletes and inserts, and by its
     // direction: a line version moves a member at most once each way.
-    function changeId(message, avatar, to) {
+    function serialOf(message) {
         if (!serials.has(message)) serials.set(message, ++serial);
-        return JSON.stringify([serials.get(message), versionOf(message), avatar, to]);
+        return serials.get(message);
+    }
+
+    const changeId = (message, avatar, to) => JSON.stringify([serialOf(message), versionOf(message), avatar, to]);
+
+    /**
+     * Lines whose shown version moves someone, in chat order, hidden lines included; each member's latest applied
+     * change (§7); and whether a listed change still waits in the queue.
+     */
+    function scanChanges(live) {
+        const queue = queueOf(live).filter(change => !change.restore);
+        const isQueued = (message, [avatar, , to]) => queue.some(change => change.message === message
+            && change.avatar === avatar && change.to === to && change.version === versionOf(message));
+        const lines = [];
+        const latest = new Map();
+        for (const [index, message] of chatOf().entries()) {
+            const moved = isRecord(message) ? readRecord(message.extra).record?.moved : undefined;
+            if (!moved?.length) continue;
+            lines.push({ index, message, moved });
+            for (const entry of moved) {
+                if (!isQueued(message, entry)) latest.set(entry[0], { index, message, version: versionOf(message), entry });
+            }
+        }
+        return { lines, latest, isQueued };
     }
 
     /** Each member's latest applied change and every queued one, in chat order, for the changes list. */
@@ -701,22 +936,11 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         try {
             const live = liveScene();
             if (!live) return [];
-            const queue = queueOf(live);
+            const { lines, latest, isQueued } = scanChanges(live);
             const names = new Map(live.participants.map(member => [member.avatar, member.name]));
-            const lines = [];
-            for (const [index, message] of chatOf().entries()) {
-                const moved = isRecord(message) ? readRecord(message.extra).record?.moved : undefined;
-                if (moved?.length) lines.push({ index, message, moved });
-            }
-            const queued = (message, [avatar, , to]) => queue.some(change => change.message === message
-                && change.avatar === avatar && change.to === to && change.version === versionOf(message));
-            const latest = new Map();
-            for (const { message, moved } of lines) {
-                for (const entry of moved) if (!queued(message, entry)) latest.set(entry[0], entry);
-            }
             return lines.flatMap(({ index, message, moved }) => moved.flatMap(entry => {
-                const isPending = queued(message, entry);
-                if (!isPending && latest.get(entry[0]) !== entry) return [];
+                const isPending = isQueued(message, entry);
+                if (!isPending && latest.get(entry[0])?.entry !== entry) return [];
                 const [avatar, from, to] = entry;
                 return [{ id: changeId(message, avatar, to), avatar, name: names.get(avatar) ?? avatar, from, to, index,
                     excerpt: excerptOf(message.mes), pending: isPending }];
@@ -724,6 +948,175 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         } catch (error) {
             logOnce(CHANGES_FAILED, error);
             return [];
+        }
+    }
+
+    /** Rebuild the latest-change index from the notes (§3, §7); views hear when the changes list moved. */
+    function reindex() {
+        try {
+            const live = liveScene();
+            const latest = live ? scanChanges(live).latest : new Map();
+            indexed = live ? { key: live.key, latest } : null;
+            const signature = JSON.stringify([live?.key, ...[...latest].map(([avatar, { index, message, entry }]) =>
+                [index, changeId(message, avatar, entry[2]), entry[1], excerptOf(message.mes)])]);
+            if (signature === indexSignature) return;
+            indexSignature = signature;
+            notify();
+        } catch (error) {
+            indexed = null;
+            logOnce(CHANGES_FAILED, error);
+        }
+    }
+
+    /** The reveal walk (§7): the lines a departure hid show again to that member. True when a note changed. */
+    function reveal(avatar) {
+        const chat = chatOf();
+        let wrote = false;
+        for (const index of revealWalk(chat, avatar)) {
+            const { record } = readRecord(chat[index].extra);
+            if (!record) continue;
+            wrote = writeNote(chat[index], { ...record, away: record.away.filter(name => name !== avatar) }) || wrote;
+        }
+        return wrote;
+    }
+
+    /**
+     * Withdrawal (§7), after a delete, edit, swipe or round end: a member's previously indexed change whose line is
+     * gone, shows another version or no longer lists it goes back to `from`, where the live status is still its
+     * result and nobody has moved that member by hand; a withdrawn departure reveals. True when a note changed.
+     */
+    function withdraw() {
+        const before = indexed;
+        reindex();
+        const live = liveScene();
+        if (!before || live?.key !== before.key || !detecting()) return false;
+        let wrote = false;
+        try {
+            for (const [avatar, { message, version, entry: [, from, to] }] of before.latest) {
+                if (stillListed({ message, version, avatar, to }) || manual.has(markOf(live.key, avatar))
+                    || statusNow(avatar) !== to) continue;
+                if (restoreLive(avatar, to, from, live.key) && to === 'absent') wrote = reveal(avatar) || wrote;
+            }
+        } catch (error) {
+            logOnce(EVENT_FAILED, error);
+        }
+        return wrote;
+    }
+
+    /**
+     * Undo one change a line lists (§7): a member's latest applied change, or one still queued. The note changes at
+     * once; the live status follows now or at the drain.
+     */
+    function undoLine(message, version, avatar, to) {
+        const live = liveScene();
+        if (!live) return UNDO_OFF;
+        if (!stillListed({ message, version, avatar, to })) return UNDO_GONE;
+        const queue = queueOf(live);
+        const queued = queue.find(change => !change.restore && change.message === message && change.version === version
+            && change.avatar === avatar && change.to === to);
+        if (queued) {
+            queue.splice(queue.indexOf(queued), 1);
+            for (const change of queue) if (change.prior === queued) change.prior = queued.prior;
+            const wrote = discard([queued]);
+            // A line that only listed this change has no note left.
+            const after = readRecord(message.extra).record ?? blankRecord();
+            return { reason: '', wrote: writeNote(message, { ...after, undone: [...after.undone, avatar] }) || wrote };
+        }
+        const newest = scanChanges(live).latest.get(avatar);
+        if (newest?.message !== message || newest.entry[2] !== to) return { reason: 'superseded', wrote: false };
+        const { record } = readRecord(message.extra);
+        const at = record.moved.findIndex(([mover, , result]) => mover === avatar && result === to);
+        let wrote = writeNote(message, { ...record, moved: record.moved.filter((_, index) => index !== at),
+            undone: [...record.undone, avatar] });
+        restoreLive(avatar, to, newest.entry[1], live.key);
+        if (to === 'absent') wrote = reveal(avatar) || wrote;
+        return { reason: '', wrote };
+    }
+
+    /** A routed plan's change no line carries yet: the user's line will list it as undone (§6, §7). */
+    function undoPlanned(change) {
+        const live = liveScene();
+        if (!live) return UNDO_OFF;
+        const at = pending?.key === live.key ? pending.planned.indexOf(change) : -1;
+        if (at < 0) return UNDO_GONE;
+        pending.planned.splice(at, 1);
+        pending.undone.push(change.avatar);
+        restoreLive(change.avatar, change.to, change.from, live.key);
+        return UNDO_DONE;
+    }
+
+    /** One Undo press: every attempt, then one toast and one save; the first reason when nothing was taken back. */
+    function undoBatch(attempts) {
+        if (destroyed) return { ok: false, reason: 'off' };
+        const reasons = [];
+        let wrote = false;
+        for (const attempt of attempts) {
+            let result = UNDO_GONE;
+            try {
+                result = attempt();
+            } catch (error) {
+                logOnce(EVENT_FAILED, error);
+            }
+            reasons.push(result.reason);
+            wrote = result.wrote || wrote;
+        }
+        const ok = reasons.includes('');
+        host.toast(ok ? { level: 'info', text: SCENE_TEXT.P19 } : { level: 'warning', text: SCENE_TEXT.P20 });
+        if (wrote) persistLater();
+        reindex();
+        notify();
+        return { ok, reason: ok ? '' : reasons[0] ?? 'gone' };
+    }
+
+    // A toast keeps the change objects it applied: a planned one is found on the user's line once that is sent.
+    const undoChanges = changes => undoBatch(changes.map(change => () => change.message
+        ? undoLine(change.message, change.version, change.avatar, change.to) : undoPlanned(change)));
+
+    /** Undo a change named by an id from getChanges (§7). */
+    function undo(id) {
+        return undoBatch([() => {
+            if (!liveScene()) return UNDO_OFF;
+            const parsed = parseChangeId(id);
+            const message = parsed ? chatOf().find(line => isRecord(line) && serials.get(line) === parsed.serial) : undefined;
+            return message ? undoLine(message, parsed.version, parsed.avatar, parsed.to) : UNDO_GONE;
+        }]);
+    }
+
+    /** Join Undo (§J.8): the named newcomers see every earlier line of that chat, saved as a live join is (§J.4). */
+    function forgetJoins(avatars, chatKey) {
+        if (destroyed) return { ok: false, applied: false };
+        let ok = false;
+        let applied = false;
+        for (const avatar of avatars) {
+            const result = joins.forgetJoin(avatar, chatKey);
+            ok = result.ok || ok;
+            applied = result.applied || applied;
+        }
+        if (applied) persist('idle').catch(error => logOnce(SAVE_FAILED, error));
+        host.toast(ok ? { level: 'info', text: SCENE_TEXT.P24 } : { level: 'warning', text: SCENE_TEXT.P20 });
+        notify();
+        return { ok, applied };
+    }
+
+    /**
+     * A member's join for the scene line (§J.8): when they joined, the last line before it, how many lines the join
+     * hides, and what turns join hiding off for them.
+     */
+    function joinStatus(avatar) {
+        const none = { joinedAt: null, lastPreJoin: null, hidden: 0, off: null };
+        try {
+            const skipped = skipReason(avatar);
+            if (skipped === 'off' || skipped === 'unavailable') return none;
+            const joinedAt = joins.joinTime(avatar);
+            if (!Number.isFinite(joinedAt)) return none;
+            const context = host.getContext();
+            const chat = Array.isArray(context.chat) ? context.chat : [];
+            const timeOf = lineTimes(context);
+            return { joinedAt, lastPreJoin: lastLineBefore(chat, joinedAt, timeOf),
+                hidden: countHidden(chat, { speaker: avatar, joinTime: joinedAt, timeOf }).joined, off: skipped };
+        } catch (error) {
+            logOnce(PREVIEW_FAILED, error);
+            return none;
         }
     }
 
@@ -737,7 +1130,12 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         MESSAGE_RECEIVED: messageReceived,
         MESSAGE_SWIPED: messageSwiped,
         MESSAGE_SWIPE_DELETED: swipeDeleted,
-        MESSAGE_DELETED: () => saver.noteDelete(),
+        MESSAGE_EDITED: messageEdited,
+        // Delete mode saves before it emits (script.js:17963-17966), so notes a take-back rewrites need GCO's save.
+        MESSAGE_DELETED: () => {
+            saver.noteDelete();
+            if (withdraw()) persistLater();
+        },
         // The host awaits this event, then saves that file itself (group-chats.js:1373-1380).
         CHARACTER_RENAMED_IN_PAST_CHAT: (messages, from, to) => joins.rename(messages, from, to),
     };
@@ -749,6 +1147,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         } catch (error) {
             logOnce(EVENT_FAILED, error);
         }
+        // deleteSwipe emits before it shows the next version; that swipe must still find the old version's change.
+        if (!destroyed && name !== 'MESSAGE_SWIPE_DELETED') reindex();
     }
 
     let active = memoryActive(settings.get());
@@ -768,16 +1168,19 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             token = config.scene_history_since;
             if (wasActive && !active) joins.reset();
             // Switched off mid-round: what waits is not applied and planned changes are not taken back (§6), but
-            // queued ones leave the notes, so they hide nothing.
+            // queued ones leave the notes, so they hide nothing. Restores from Undo still apply at the drain.
             if (wasAutomatic && !automatic && pending) {
                 const batch = pending;
-                pending = null;
+                const restores = batch.queue.filter(change => change.restore);
+                pending = restores.length ? { ...batch, queue: restores, planned: [] } : null;
                 if (discard(batch.queue)) persistLater();
                 notify();
             }
             if (!active || (wasActive && !renewed)) return;
             checkJoins('turn-on');
-            if (!wasActive) readAll(liveScene());
+            if (wasActive) return;
+            readAll(liveScene());
+            reindex();
         } catch (error) {
             logOnce(EVENT_FAILED, error);
         }
@@ -785,12 +1188,14 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
 
     const stopEvents = host.onHostEvents(HOST_EVENTS, onHostEvent);
     const stopSettings = settings.subscribe(settingsChanged);
+    const stopScene = scene.subscribe(track);
 
     function destroy() {
         if (destroyed) return;
         destroyed = true;
         stopEvents();
         stopSettings();
+        stopScene();
         round = null;
         pending = null;
         listeners.clear();
@@ -801,7 +1206,9 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     // GCO can start after the chat's CHAT_CHANGED; the init check sets the cursor before the first filter.
     try {
         checkJoins('init');
+        track();
         readAll(liveScene());
+        reindex();
     } catch (error) {
         logOnce(EVENT_FAILED, error);
     }
@@ -815,6 +1222,9 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         prepareTurn,
         hold,
         getChanges,
+        undo,
+        joinStatus,
+        forgetJoin: (avatar, chatKey = host.activeConversation()?.key) => forgetJoins([avatar], chatKey),
         subscribe(listener) {
             if (destroyed) return () => {};
             listeners.add(listener);

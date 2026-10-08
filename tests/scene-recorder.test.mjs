@@ -43,8 +43,17 @@ function lines3(fake) {
     ];
 }
 
-/** Open a chat and mark members away in its scene (Bob unless stated). */
+/** A chat used with scene controls before has a scene entry, so opening it seeds nothing (§3). */
+function keepScene(t) {
+    const stored = t.fake.settings.get().current_scenes ?? { version: 1, chats: {} };
+    const key = t.fake.host.activeConversation().key;
+    if (stored.version !== 1 || Object.hasOwn(stored.chats, key)) return;
+    t.fake.settings.update({ current_scenes: { ...stored, chats: { ...stored.chats, [key]: { members: {} } } } });
+}
+
+/** Open a chat used before and mark members away in its scene (Bob unless stated). */
 async function openScene(t, lines, { absent = ['bob.png'], metadata } = {}) {
+    keepScene(t);
     await t.fake.openChat(lines, metadata);
     for (const avatar of absent) assert.equal(t.scene.setState(avatar, 'absent').ok, true, avatar);
 }
@@ -72,7 +81,9 @@ const finished = (fake, type = 'normal') => wrapper(fake, 'GROUP_WRAPPER_FINISHE
 const statusOf = (t, avatar) => t.scene.getSnapshot().participants.find(member => member.avatar === avatar)?.status;
 const statusesOf = t => Object.fromEntries(t.scene.getSnapshot().participants.map(member => [member.avatar, member.status]));
 const keyOf = t => t.fake.host.activeConversation().key;
-const applied = { level: 'info', text: SCENE_TEXT.P11 };
+/** A toast as shownToasts() lists it when it offers Undo. */
+const withUndo = toast => ({ ...toast, actionLabel: SCENE_TEXT.P12, onAction: 'function' });
+const applied = withUndo({ level: 'info', text: SCENE_TEXT.P11 });
 
 function switchChat(fake, chatId) {
     fake.context.chatId = chatId;
@@ -860,7 +871,8 @@ describe('scene recorder recording', () => {
         lines[0].extra = { sbu_scene: { v: 1, away: 'bob.png' } };
         await fake.openChat(lines, header([]));
         assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
-        assert.equal(fake.toasts.length, 1);
+        assert.deepEqual(fake.shownToasts(), [withUndo({ level: 'info', text: SCENE_TEXT.P25, detail: 'Dave (3)' }),
+            { level: 'warning', text: SCENE_TEXT.P15 }]);
 
         fake.settings.update({ scene_history: false, scene_history_since: null });
         fake.settings.update({ scene_history: true, scene_history_since: NEW_TOKEN });
@@ -912,19 +924,19 @@ describe('scene recorder recording', () => {
         const warning = { level: 'warning', text: SCENE_TEXT.P15 };
         await t.fake.openChat(odd());
         await t.fake.openChat(odd());
-        assert.deepEqual(t.fake.toasts, [warning]);
+        assert.deepEqual(t.fake.shownToasts(), [warning]);
         assert.deepEqual(note(t.fake.context.chat[0]), { v: 1, away: 'bob.png' });
 
         switchChat(t.fake, 'c2');
         await t.fake.openChat(odd());
-        assert.deepEqual(t.fake.toasts, [warning, warning]);
+        assert.deepEqual(t.fake.shownToasts(), [warning, warning]);
 
         t.fake.settings.update({ scene_history: false });
         switchChat(t.fake, 'c3');
         await t.fake.openChat(odd());
         assert.equal(t.fake.toasts.length, 2);
         t.fake.settings.update({ scene_history: true });
-        assert.deepEqual(t.fake.toasts, [warning, warning, warning]);
+        assert.deepEqual(t.fake.shownToasts(), [warning, warning, warning]);
     });
 
     test('saves after every creation-event write when the host cannot report generating', async () => {
@@ -1114,12 +1126,12 @@ describe('scene recorder join wiring', () => {
         const broken = () => ({ integrity: 'fake-integrity', [ROSTER_KEY]: { v: 1, group: '' } });
         await t.fake.openChat(lines3(t.fake), broken());
         await t.fake.openChat(lines3(t.fake), broken());
-        assert.deepEqual(t.fake.toasts, [{ level: 'warning', text: SCENE_TEXT.P27 }]);
+        assert.deepEqual(t.fake.shownToasts(), [{ level: 'warning', text: SCENE_TEXT.P27 }]);
 
         switchChat(t.fake, 'c2');
         await t.fake.openChat(lines3(t.fake), { integrity: 'fake-integrity', [ROSTER_KEY]: { v: 2 } });
         await t.fake.openChat(lines3(t.fake), { integrity: 'fake-integrity', [ROSTER_KEY]: { v: 2 } });
-        assert.deepEqual(t.fake.toasts, [{ level: 'warning', text: SCENE_TEXT.P27 }, { level: 'warning', text: SCENE_TEXT.P28 }]);
+        assert.deepEqual(t.fake.shownToasts(), [{ level: 'warning', text: SCENE_TEXT.P27 }, { level: 'warning', text: SCENE_TEXT.P28 }]);
     });
 
     test('renames the roster in a past chat and leaves the save to the host', async () => {
@@ -1168,7 +1180,7 @@ describe('scene recorder automatic presence', () => {
         assert.deepEqual(note(chat()[sendas]), { v: 1, away: ['bob.png'], moved: [['carol.png', 'absent', 'present']] });
         assert.deepEqual(entryNote(chat()[sendas], 0), note(chat()[sendas]));
         assert.equal(statusOf(t, 'carol.png'), 'present');
-        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied, applied]);
         assert.deepEqual(rows(t), [
             { avatar: 'bob.png', name: 'Bob', from: 'unspecified', to: 'absent', index: 3, excerpt: 'Bob leaves.', pending: false },
             { avatar: 'carol.png', name: 'Carol', from: 'absent', to: 'present', index: 4, excerpt: 'Carol walks in.',
@@ -1189,7 +1201,7 @@ describe('scene recorder automatic presence', () => {
         await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
         t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
         assert.equal(statusOf(t, 'alice.png'), 'present');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
 
         t.fake.setGenerating(true);
         // A macro expanded after the plan ran: the sent text names Bob too.
@@ -1204,7 +1216,7 @@ describe('scene recorder automatic presence', () => {
         t.fake.setGenerating(false);
         await finished(t.fake);
         assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'absent']);
-        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied, applied]);
         assert.deepEqual(rows(t).map(({ avatar, pending }) => [avatar, pending]), [['alice.png', false], ['bob.png', false]]);
     });
 
@@ -1220,7 +1232,7 @@ describe('scene recorder automatic presence', () => {
         t.fake.setGenerating(false);
         await finished(t.fake);
         assert.equal(statusOf(t, 'alice.png'), 'absent');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
 
         t.recorder.prepareTurn({ text: 'Alice walks in.', key: JSON.stringify(['g1', 'another chat']) });
         t.recorder.prepareTurn({ text: 42, key: keyOf(t) });
@@ -1248,11 +1260,11 @@ describe('scene recorder automatic presence', () => {
         const last = await t.fake.receive('carol.png', 'Welcome back.');
         assert.equal(note(chat()[last]), undefined);
         assert.equal(statusOf(t, 'bob.png'), 'unspecified');
-        assert.deepEqual(t.fake.toasts, []);
+        assert.deepEqual(t.fake.shownToasts(), []);
 
         await finished(t.fake);
         assert.equal(statusOf(t, 'bob.png'), 'present');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
         assert.deepEqual(rows(t).map(({ index, pending }) => [index, pending]), [[3, false]]);
     });
 
@@ -1280,7 +1292,7 @@ describe('scene recorder automatic presence', () => {
             t.fake.setGenerating(false);
             await finished(t.fake);
             assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'unspecified'], label);
-            assert.deepEqual(t.fake.toasts, [applied], label);
+            assert.deepEqual(t.fake.shownToasts(), [applied], label);
             assert.equal(t.recorder.getChanges().some(change => change.pending), false, label);
         }
     });
@@ -1297,7 +1309,7 @@ describe('scene recorder automatic presence', () => {
         await t.fake.openChat(lines3(t.fake));
         await finished(t.fake);
         assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'unspecified']);
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
     });
 
     test('holds the drain until every hold is released', async () => {
@@ -1314,7 +1326,7 @@ describe('scene recorder automatic presence', () => {
         assert.equal(statusOf(t, 'bob.png'), 'unspecified');
         second();
         assert.equal(statusOf(t, 'bob.png'), 'absent');
-        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
 
         // While an Ask runs, a typed line's change waits too.
         const third = t.recorder.hold();
@@ -1351,7 +1363,7 @@ describe('scene recorder automatic presence', () => {
         await push(t.fake, t.fake.message({ avatar: 'carol.png', mes: 'Bob leaves.' }), 'MESSAGE_RECEIVED', 'first_message');
 
         assert.deepEqual(statusesOf(t), { 'alice.png': 'unspecified', 'bob.png': 'unspecified', 'carol.png': 'unspecified' });
-        assert.deepEqual(t.fake.toasts, []);
+        assert.deepEqual(t.fake.shownToasts(), []);
         assert.equal(chat().some(line => note(line)?.moved), false);
         assert.deepEqual(t.recorder.getChanges(), []);
     });
@@ -1373,7 +1385,7 @@ describe('scene recorder automatic presence', () => {
             await finished(t.fake);
             assert.deepEqual(note(t.fake.context.chat[id]), noted('carol.png'), JSON.stringify(settings));
             assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['unspecified', 'absent'], JSON.stringify(settings));
-            assert.deepEqual(t.fake.toasts, [], JSON.stringify(settings));
+            assert.deepEqual(t.fake.shownToasts(), [], JSON.stringify(settings));
         }
     });
 
@@ -1398,7 +1410,7 @@ describe('scene recorder automatic presence', () => {
         assert.deepEqual(note(chat()[id]).moved, [['bob.png', 'absent', 'present'], ['carol.png', 'absent', 'present']]);
         await finished(t.fake);
         assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['present', 'present']);
-        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied, applied]);
     });
 
     test('reads changes in a stopped stream and in an unread version', async () => {
@@ -1415,7 +1427,7 @@ describe('scene recorder automatic presence', () => {
         await t.fake.swipeTo(id, 1);
         assert.deepEqual(note(chat()[id]), { v: 1, moved: [['bob.png', 'absent', 'present']] });
         assert.equal(statusOf(t, 'bob.png'), 'present');
-        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(t.fake.shownToasts(), [applied, applied]);
     });
 
     test('applies a queued change only while its line lists it and the live status allows it', async () => {
@@ -1433,7 +1445,7 @@ describe('scene recorder automatic presence', () => {
         await t.fake.swipeTo(swiped - 1, 1);
         await finished(t.fake);
         assert.deepEqual(statusesOf(t), { 'alice.png': 'unspecified', 'bob.png': 'remote', 'carol.png': 'unspecified' });
-        assert.deepEqual(t.fake.toasts, []);
+        assert.deepEqual(t.fake.shownToasts(), []);
     });
 
     test('reads members by their Reply Rules aliases, and first person only as a character\'s author', async () => {
@@ -1462,7 +1474,7 @@ describe('scene recorder automatic presence', () => {
         const id = await fake.sendUser('Bob leaves.');
         assert.deepEqual(note(fake.context.chat[id]), noted('carol.png'));
         assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['unspecified', 'absent']);
-        assert.deepEqual(fake.toasts, []);
+        assert.deepEqual(fake.shownToasts(), []);
         assert.equal(t.logs.length, 1);
     });
 
@@ -1524,7 +1536,7 @@ describe('scene recorder automatic presence', () => {
             assert.equal(entryNote(later, 0), undefined, label);
             assert.equal(t.recorder.filter(promptOf(chat()), 'normal', 'bob.png'), 0, label);
             assert.deepEqual(t.recorder.getChanges(), [], label);
-            assert.deepEqual(t.fake.toasts, [], label);
+            assert.deepEqual(t.fake.shownToasts(), [], label);
             assert.equal(t.fake.saves.length, 1, label);
         }
     });
@@ -1590,7 +1602,7 @@ describe('scene recorder automatic presence', () => {
         assert.equal(t.fake.saves.length, 2);
         second.release();
         assert.equal(statusOf(t, 'bob.png'), 'unspecified');
-        assert.deepEqual(t.fake.toasts, []);
+        assert.deepEqual(t.fake.shownToasts(), []);
     });
 
     test('keeps a round\'s changes for its end when scene memory turns on during it', async () => {
@@ -1601,10 +1613,10 @@ describe('scene recorder automatic presence', () => {
             t.fake.settings.update({ [key]: true });
             await t.fake.receive('carol.png', 'Bob heads out.');
             assert.equal(statusOf(t, 'bob.png'), 'unspecified', key);
-            assert.deepEqual(t.fake.toasts, [], key);
+            assert.deepEqual(t.fake.shownToasts(), [], key);
             await finished(t.fake);
             assert.equal(statusOf(t, 'bob.png'), 'absent', key);
-            assert.deepEqual(t.fake.toasts, [applied], key);
+            assert.deepEqual(t.fake.shownToasts(), [applied], key);
         }
     });
 
@@ -1644,6 +1656,588 @@ describe('scene recorder automatic presence', () => {
         await started(t.fake);
         await finished(t.fake);
         assert.equal(statusOf(t, 'alice.png'), 'absent');
+    });
+});
+
+describe('scene recorder take-backs and Undo', () => {
+    const auto = (options = {}) => setup({ ...options, settings: { scene_auto: true, ...options.settings } });
+    const hello = fake => [fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })];
+    const undone = { level: 'info', text: SCENE_TEXT.P19 };
+    const refused = { level: 'warning', text: SCENE_TEXT.P20 };
+    const nobody = { 'alice.png': 'unspecified', 'bob.png': 'unspecified', 'carol.png': 'unspecified' };
+
+    /** The Undo a toast offers. */
+    function actionOf(toast) {
+        assert.equal(toast?.actionLabel, SCENE_TEXT.P12);
+        assert.equal(typeof toast.onAction, 'function');
+        return toast.onAction;
+    }
+
+    /** Alice's reply moves Bob out at once (no round runs), and the user's next line is noted against it. */
+    async function departed(t) {
+        const chat = t.fake.context.chat;
+        const left = chat[await t.fake.receive('alice.png', 'Bob heads out.')];
+        const after = chat[await t.fake.sendUser('Psst.')];
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(after), noted('bob.png'));
+        return { left, after };
+    }
+
+    test('withdraws a departure when its line is deleted', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const { left, after } = await departed(t);
+        const saved = t.fake.saves.length;
+        await t.fake.deleteLine(t.fake.context.chat.indexOf(left));
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(after), undefined);
+        assert.equal(entryNote(after, 0), undefined);
+        assert.equal(t.recorder.filter(promptOf(t.fake.context.chat), 'normal', 'bob.png'), 0);
+        assert.deepEqual(t.recorder.getChanges(), []);
+        // Delete mode saves before the event, so GCO saves the un-hidden line itself, inside the delete window.
+        assert.deepEqual(t.fake.saves.slice(saved).map(save => save.options), [{ allowShrink: true }]);
+        assert.equal(t.fake.toasts.length, 1);
+    });
+
+    test('withdraws a regenerated departure, so the new replies are not hidden', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        await started(t.fake);
+        await t.fake.receive('alice.png', 'Bob heads out.');
+        const quiet = chat[await t.fake.receive('carol.png', 'Quiet now.')];
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(quiet), noted('bob.png'));
+
+        // Group Regenerate deletes the round's replies from the end, then a new round answers.
+        while (chat.length > 1) {
+            chat.pop();
+            await t.fake.emit('MESSAGE_DELETED', chat.length);
+        }
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        await started(t.fake);
+        const again = chat[await t.fake.receive('carol.png', 'Still quiet.')];
+        await finished(t.fake);
+        assert.equal(note(again), undefined);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(t.recorder.filter(promptOf(chat), 'normal', 'bob.png'), 0);
+    });
+
+    test('withdraws a departure when its version is swiped away', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const id = await t.fake.receive('alice.png', 'Bob heads out.', 'normal', { alternatives: ['Hm.'] });
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        await t.fake.swipeTo(id, 1);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(chat[id]), undefined);
+
+        // A swipe that generates takes the change back before the new version is written.
+        const next = await t.fake.receive('carol.png', 'Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        await t.fake.swipeGenerate(next);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(next, 'Evening.');
+        await finished(t.fake, 'swipe');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(chat[next]), undefined);
+
+        // The picker on an older line takes the change back and never applies the version it shows.
+        const older = await t.fake.receive('alice.png', 'Bob heads out.', 'normal', { alternatives: ['Hm.'] });
+        const evening = chat[await t.fake.receive('carol.png', 'Evening.')];
+        assert.deepEqual(note(evening), noted('bob.png'));
+        await t.fake.swipeTo(older, 1);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(evening), undefined);
+        await t.fake.swipeTo(older, 0);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(t.fake.toasts.length, 3);
+    });
+
+    test('withdraws a departure when an edit takes it out of the line', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const { left, after } = await departed(t);
+        const saved = t.fake.saves.length;
+        await t.fake.editLine(t.fake.context.chat.indexOf(left), 'Bob waves.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(left), undefined);
+        assert.equal(entryNote(left, 0), undefined);
+        assert.equal(note(after), undefined);
+        // The host saves right after an edit.
+        assert.equal(t.fake.saves.length, saved);
+    });
+
+    test('an edit to an older departure that a later line superseded changes nothing', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const left = await t.fake.receive('alice.png', 'Bob heads out.');
+        const back = await t.fake.receive('carol.png', 'Bob comes back.');
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        await t.fake.editLine(left, 'Alice waves.');
+        assert.equal(note(chat[left]), undefined);
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.deepEqual(note(chat[back]), { v: 1, moved: [['bob.png', 'absent', 'present']] });
+        assert.deepEqual(t.recorder.getChanges().map(({ avatar, to, index }) => [avatar, to, index]),
+            [['bob.png', 'present', back]]);
+        assert.equal(t.fake.toasts.length, 2);
+    });
+
+    test('an edit adds a change on the newest line only', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const older = await t.fake.receive('alice.png', 'Evening.');
+        const newest = await t.fake.receive('carol.png', 'Hm.');
+        await t.fake.editLine(older, 'Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(chat[older]), undefined);
+        await t.fake.editLine(newest, 'Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(chat[newest]), { v: 1, moved: [['bob.png', 'unspecified', 'absent']] });
+        assert.deepEqual(t.fake.shownToasts(), [applied]);
+    });
+
+    test('an edit reads the newest line against the scene after its own take-back', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const id = await t.fake.receive('alice.png', 'Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        // Bob was never away before this line, so once its departure is gone, coming back moves nobody.
+        await t.fake.editLine(id, 'Bob comes back.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(note(chat[id]), undefined);
+        assert.equal(t.fake.toasts.length, 1);
+    });
+
+    test('a manual change blocks withdrawal', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const { left, after } = await departed(t);
+        // Marked present and away again by hand: the user's choice stands when the line goes.
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.deleteLine(chat.indexOf(left));
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(after), noted('bob.png'));
+
+        // The next automatic change for Bob clears the mark.
+        await t.fake.receive('carol.png', 'Bob comes back.');
+        const again = chat[await t.fake.receive('alice.png', 'Bob heads out.')];
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        await t.fake.deleteLine(chat.indexOf(again));
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+    });
+
+    test('a manual change still blocks withdrawal after another chat was opened', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const { left, after } = await departed(t);
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        switchChat(t.fake, 'c2');
+        await t.fake.openChat(hello(t.fake));
+        switchChat(t.fake, 'c1');
+        await t.fake.openChat(chat);
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        await t.fake.deleteLine(chat.indexOf(left));
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(after), noted('bob.png'));
+    });
+
+    test('Undo restores the status, reveals the lines and is not re-applied by Continue or a typo edit', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const { left, after } = await departed(t);
+        const saved = t.fake.saves.length;
+        const [change] = t.recorder.getChanges();
+        assert.deepEqual(t.recorder.undo(change.id), { ok: true, reason: '' });
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(note(left), { v: 1, undone: ['bob.png'] });
+        assert.deepEqual(entryNote(left, 0), { v: 1, undone: ['bob.png'] });
+        assert.equal(note(after), undefined);
+        assert.equal(t.recorder.filter(promptOf(chat), 'normal', 'bob.png'), 0);
+        assert.deepEqual(t.recorder.getChanges(), []);
+        assert.deepEqual(t.fake.shownToasts().slice(1), [undone]);
+        assert.equal(t.fake.saves.length, saved + 1);
+        // Pressed twice, the second Undo finds nothing to take back.
+        assert.deepEqual(t.recorder.undo(change.id), { ok: false, reason: 'gone' });
+        assert.deepEqual(t.fake.shownToasts().slice(1), [undone, refused]);
+
+        // Undo from the toast; then Continue and a typo edit on that line never bring the change back.
+        const id = await t.fake.receive('carol.png', 'Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        actionOf(t.fake.toasts.at(-1))();
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        await t.fake.continueLine(id, ' Then Bob heads out.');
+        await t.fake.editLine(id, 'Bob heads out! Then Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(note(chat[id]), { v: 1, undone: ['bob.png'] });
+        assert.deepEqual(t.fake.shownToasts().slice(4), [undone]);
+    });
+
+    test('Undo on a round\'s toast takes back every change it applied', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        await started(t.fake);
+        await t.fake.receive('alice.png', 'Bob heads out.');
+        const second = chat[await t.fake.receive('alice.png', 'Carol heads out.')];
+        await finished(t.fake);
+        assert.deepEqual(statusesOf(t), { ...nobody, 'bob.png': 'absent', 'carol.png': 'absent' });
+        assert.deepEqual(note(second), { v: 1, away: ['bob.png'], moved: [['carol.png', 'unspecified', 'absent']] });
+        assert.equal(t.fake.toasts.length, 1);
+        actionOf(t.fake.toasts[0])();
+        assert.deepEqual(statusesOf(t), nobody);
+        assert.deepEqual(note(second), { v: 1, undone: ['carol.png'] });
+        assert.deepEqual(t.fake.shownToasts().slice(1), [undone]);
+        assert.deepEqual(t.recorder.getChanges(), []);
+    });
+
+    test('takes back an Undo pressed during a round at the round\'s end', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const { left, after } = await departed(t);
+        const saved = t.fake.saves.length;
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        const [change] = t.recorder.getChanges();
+        assert.deepEqual(t.recorder.undo(change.id), { ok: true, reason: '' });
+        // The notes change at once; the scene waits for the round.
+        assert.deepEqual(note(left), { v: 1, undone: ['bob.png'] });
+        assert.equal(note(after), undefined);
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        // A line noted meanwhile already counts Bob as back.
+        const reply = t.fake.context.chat[await t.fake.receive('carol.png', 'Evening.')];
+        assert.equal(note(reply), undefined);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        // The host's reply save carried the notes.
+        assert.equal(t.fake.saves.length, saved);
+    });
+
+    test('Undo takes back a change still waiting for the round', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        const id = await t.fake.receive('alice.png', 'Bob heads out.');
+        const quiet = chat[await t.fake.receive('carol.png', 'Quiet now.')];
+        assert.deepEqual(note(quiet), noted('bob.png'));
+        const [change] = t.recorder.getChanges();
+        assert.equal(change.pending, true);
+        assert.deepEqual(t.recorder.undo(change.id), { ok: true, reason: '' });
+        assert.deepEqual(note(chat[id]), { v: 1, undone: ['bob.png'] });
+        assert.deepEqual(entryNote(chat[id], 0), { v: 1, undone: ['bob.png'] });
+        assert.equal(note(quiet), undefined);
+        assert.deepEqual(t.fake.shownToasts(), [undone]);
+        assert.deepEqual(t.recorder.getChanges(), []);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+
+        // The Undo stays on the line: continuing it never moves Bob again.
+        await t.fake.continueLine(id, ' Bob heads out.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(note(chat[id]), { v: 1, undone: ['bob.png'] });
+        assert.deepEqual(t.fake.shownToasts(), [undone]);
+    });
+
+    test('a take-back during a round puts the member back before the changes that wait for it', async () => {
+        const ways = [
+            ['Undo', t => assert.deepEqual(t.recorder.undo(t.recorder.getChanges().find(row => !row.pending).id),
+                { ok: true, reason: '' })],
+            ['delete', (t, left) => t.fake.deleteLine(t.fake.context.chat.indexOf(left))],
+        ];
+        for (const [label, takeBack] of ways) {
+            const t = await auto();
+            await openScene(t, hello(t.fake), { absent: [] });
+            const chat = t.fake.context.chat;
+            const left = chat[await t.fake.receive('alice.png', 'Bob heads out.')];
+            assert.equal(statusOf(t, 'bob.png'), 'absent', label);
+            t.fake.setGenerating(true);
+            await started(t.fake);
+            const back = chat[await t.fake.receive('carol.png', 'Bob comes back.')];
+            assert.deepEqual(note(back), { v: 1, moved: [['bob.png', 'absent', 'present']] }, label);
+            await takeBack(t, left);
+            t.fake.setGenerating(false);
+            await finished(t.fake);
+            // Bob never left, so his return moves nobody and leaves the note.
+            assert.equal(statusOf(t, 'bob.png'), 'unspecified', label);
+            assert.equal(note(back), undefined, label);
+            assert.deepEqual(t.recorder.getChanges(), [], label);
+        }
+    });
+
+    test('undoes a routed plan\'s change before or after its line is sent', async () => {
+        for (const sentFirst of [false, true]) {
+            const label = sentFirst ? 'after the send' : 'before the send';
+            const t = await auto();
+            await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+            t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+            assert.equal(statusOf(t, 'alice.png'), 'present', label);
+            const undo = actionOf(t.fake.toasts[0]);
+            t.fake.setGenerating(true);
+            let id;
+            if (sentFirst) id = await t.fake.sendUser('Alice walks in. Hi Alice');
+            undo();
+            if (!sentFirst) id = await t.fake.sendUser('Alice walks in. Hi Alice');
+            // The scene waits for the round, and the user's line never moves Alice.
+            assert.equal(statusOf(t, 'alice.png'), 'present', label);
+            assert.deepEqual(note(t.fake.context.chat[id]),
+                sentFirst ? { v: 1, undone: ['alice.png'] } : { v: 1, away: ['alice.png'], undone: ['alice.png'] }, label);
+            await started(t.fake);
+            await t.fake.receive('carol.png', 'Evening.');
+            t.fake.setGenerating(false);
+            await finished(t.fake);
+            assert.equal(statusOf(t, 'alice.png'), 'absent', label);
+            assert.deepEqual(t.fake.shownToasts().slice(1), [undone], label);
+            assert.deepEqual(t.recorder.getChanges(), [], label);
+        }
+    });
+
+    test('reports what Undo can no longer take back', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = t.fake.context.chat;
+        const left = chat[await t.fake.receive('alice.png', 'Bob heads out.')];
+        const [departure] = t.recorder.getChanges();
+        await t.fake.receive('carol.png', 'Bob comes back.');
+        const [arrival] = t.recorder.getChanges();
+        assert.deepEqual(t.recorder.undo(departure.id), { ok: false, reason: 'superseded' });
+        for (const id of [undefined, 42, 'not json', '[1,0,"bob.png"]', JSON.stringify([999, 0, 'bob.png', 'absent'])]) {
+            assert.deepEqual(t.recorder.undo(id), { ok: false, reason: 'gone' }, String(id));
+        }
+        await t.fake.deleteLine(chat.indexOf(left));
+        assert.deepEqual(t.recorder.undo(departure.id), { ok: false, reason: 'gone' });
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        t.fake.settings.update({ scene_history: false });
+        assert.deepEqual(t.recorder.undo(arrival.id), { ok: false, reason: 'off' });
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.deepEqual(t.fake.shownToasts().slice(2), Array(8).fill(refused));
+    });
+
+    test('swiping back to a read version re-applies its stored change where the live status allows', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const id = await t.fake.receive('alice.png', 'Bob heads out.', 'normal', { alternatives: ['Hm.'] });
+        await t.fake.swipeTo(id, 1);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        await t.fake.swipeTo(id, 0);
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.equal(t.fake.toasts.length, 2);
+        actionOf(t.fake.toasts[1]);
+
+        // Marked remote by hand meanwhile: the stored departure no longer applies.
+        await t.fake.swipeTo(id, 1);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.equal(t.scene.setState('bob.png', 'remote').ok, true);
+        await t.fake.swipeTo(id, 0);
+        assert.equal(statusOf(t, 'bob.png'), 'remote');
+        assert.equal(t.fake.toasts.length, 2);
+    });
+
+    test('Continue can only shrink away and never re-adds an undone change', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: ['carol.png'] });
+        const chat = t.fake.context.chat;
+        const id = await t.fake.receive('alice.png', 'Carol walks in.');
+        assert.equal(statusOf(t, 'carol.png'), 'present');
+        actionOf(t.fake.toasts[0])();
+        assert.equal(statusOf(t, 'carol.png'), 'absent');
+        assert.deepEqual(note(chat[id]), { v: 1, undone: ['carol.png'] });
+
+        // Bob is marked away before the line continues: its note never gains him.
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.continueLine(id, ' Carol walks in again.');
+        assert.deepEqual(note(chat[id]), { v: 1, undone: ['carol.png'] });
+        assert.equal(statusOf(t, 'carol.png'), 'absent');
+        assert.deepEqual(t.fake.shownToasts().slice(1), [undone]);
+    });
+
+    test('seeds a branch\'s scene from its newest recorded line, with Undo', async () => {
+        const t = await setup();
+        const branch = () => [
+            t.fake.message({ avatar: 'alice.png', mes: 'One.', send_date: iso(START - 3000) }),
+            t.fake.message({ avatar: 'bob.png', mes: 'Two.', send_date: iso(START - 2000),
+                extra: { sbu_scene: { v: 1, away: ['carol.png'], moved: [['alice.png', 'present', 'absent']] } } }),
+            t.fake.message({ avatar: 'carol.png', mes: 'Hidden.', send_date: iso(START - 1000), is_system: true }),
+        ];
+        switchChat(t.fake, 'branch');
+        await t.fake.openChat(branch());
+        assert.deepEqual(statusesOf(t), { ...nobody, 'alice.png': 'absent', 'carol.png': 'absent' });
+        assert.deepEqual(t.fake.shownToasts(), [withUndo({ level: 'info', text: SCENE_TEXT.P13 })]);
+        assert.deepEqual(t.fake.saves, []);
+        actionOf(t.fake.toasts[0])();
+        assert.deepEqual(statusesOf(t), nobody);
+        assert.deepEqual(t.fake.shownToasts().slice(1), [undone]);
+
+        // The chat now has its own scene, so opening it again seeds nothing.
+        await t.fake.openChat(branch());
+        assert.deepEqual(statusesOf(t), nobody);
+
+        // Nothing is seeded while scene memory is off, or from a newest line without a note.
+        t.fake.settings.update({ scene_history: false });
+        switchChat(t.fake, 'while off');
+        await t.fake.openChat(branch());
+        t.fake.settings.update({ scene_history: true });
+        assert.deepEqual(statusesOf(t), nobody);
+        switchChat(t.fake, 'plain');
+        await t.fake.openChat([...branch(), t.fake.message({ avatar: 'alice.png', mes: 'Three.' })]);
+        assert.deepEqual(statusesOf(t), nobody);
+        assert.equal(t.fake.toasts.length, 2);
+    });
+
+    test('rebuilds the index after a simulated reload', async () => {
+        const first = await auto();
+        await openScene(first, hello(first.fake), { absent: [] });
+        const chat = first.fake.context.chat;
+        await started(first.fake);
+        const left = chat[await first.fake.receive('alice.png', 'Bob heads out.')];
+        const quiet = chat[await first.fake.receive('carol.png', 'Quiet now.')];
+        await finished(first.fake);
+        first.recorder.destroy();
+
+        // A page reload: a new recorder over the same chat and scene, with nothing of the round in memory.
+        const second = attach(first.fake);
+        assert.deepEqual(second.recorder.getChanges().map(({ avatar, to, index }) => [avatar, to, index]),
+            [['bob.png', 'absent', 1]]);
+        await first.fake.deleteLine(chat.indexOf(left));
+        assert.equal(statusOf(second, 'bob.png'), 'unspecified');
+        assert.equal(note(quiet), undefined);
+    });
+
+    test('join Undo shows every earlier line and survives a refused save as a reveal pair', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+        const chat = () => t.fake.context.chat;
+        const key = keyOf(t);
+        await t.fake.addMember('dave.png');
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+        assert.deepEqual(t.fake.shownToasts(), [withUndo({ level: 'info', text: SCENE_TEXT.P25, detail: 'Dave (3)' })]);
+        assert.equal(t.recorder.filter(promptOf(chat()), 'normal', 'dave.png'), 3);
+        const saved = t.fake.saves.length;
+
+        t.fake.context.saveResult = false;
+        actionOf(t.fake.toasts[0])();
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
+        assert.deepEqual(t.fake.shownToasts().slice(1), [{ level: 'info', text: SCENE_TEXT.P24 }]);
+        assert.equal(t.fake.saves.length, saved + 1);
+        assert.equal(t.recorder.filter(promptOf(chat()), 'normal', 'dave.png'), 0);
+        await new Promise(resolve => setImmediate(resolve));
+        assert.deepEqual(t.fake.settings.get().scene_join_reveals, [[key, 'dave.png']]);
+
+        // The file still holds the join: opening the chat again takes it out again.
+        await t.fake.openChat(lines3(t.fake), header([['dave.png', iso(START - 1000)]]));
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
+        assert.equal(t.recorder.filter(promptOf(chat()), 'normal', 'dave.png'), 0);
+        assert.equal(t.recorder.joinStatus('dave.png').joinedAt, null);
+        assert.equal(t.fake.toasts.length, 2);
+
+        // The first save that carries the removal drops the pair.
+        t.fake.context.saveResult = true;
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.sendUser('Hi.');
+        assert.equal(t.fake.settings.get().scene_join_reveals, null);
+    });
+
+    test('gives the last line before a join even when another rule keeps or hides it', async () => {
+        const cases = [
+            ['written as Dave', fake => fake.message({ avatar: 'dave.png', mes: 'Written as Dave.',
+                send_date: iso(START - 1000) })],
+            ['already away', fake => fake.message({ avatar: 'bob.png', mes: 'Hey.', send_date: iso(START - 1000),
+                extra: away('dave.png') })],
+        ];
+        for (const [label, last] of cases) {
+            const t = await setup();
+            const lines = lines3(t.fake);
+            lines[2] = last(t.fake);
+            await openScene(t, lines, { absent: [], metadata: header([]) });
+            await t.fake.addMember('dave.png');
+            assert.deepEqual(t.recorder.joinStatus('dave.png'),
+                { joinedAt: START - 1000, lastPreJoin: 2, hidden: 2, off: null }, label);
+        }
+    });
+
+    test('reports a joiner\'s status, and when knows everything or Vocalia turns join hiding off', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+        const none = { joinedAt: null, lastPreJoin: null, hidden: 0, off: null };
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), none);
+        await t.fake.addMember('dave.png');
+        const joined = { joinedAt: START - 1000, lastPreJoin: 2, hidden: 3, off: null };
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), joined);
+        assert.deepEqual(t.recorder.joinStatus('alice.png'), none);
+        await t.fake.receive('alice.png', 'After the join.');
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), joined);
+
+        t.recorder.setOmniscient('dave.png', true);
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), { ...joined, off: 'omniscient' });
+        t.recorder.setOmniscient('dave.png', false);
+        t.fake.context.extensionSettings.aspect_vocalia = { enabled: true };
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), { ...joined, off: 'vocalia' });
+        delete t.fake.context.extensionSettings.aspect_vocalia;
+        t.fake.settings.update({ scene_history: false });
+        assert.deepEqual(t.recorder.joinStatus('dave.png'), none);
+        for (const avatar of [undefined, null, '', 42]) assert.deepEqual(t.recorder.joinStatus(avatar), none, String(avatar));
+    });
+
+    test('the join toast names each newcomer with the earlier lines hidden from them, and its Undo forgets them all',
+        async () => {
+            const t = await setup();
+            await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+            await t.fake.addMember('dave.png', { event: false });
+            await t.fake.addMember('erin.png');
+            assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined,
+                [['dave.png', iso(START - 1000)], ['erin.png', iso(START - 1000)]]);
+            assert.deepEqual(t.fake.shownToasts(),
+                [withUndo({ level: 'info', text: SCENE_TEXT.P25, detail: 'Dave (3), Erin (3)' })]);
+            actionOf(t.fake.toasts[0])();
+            assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
+        });
+
+    test('forgets a join on request and saves it like a live join', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+        await t.fake.addMember('dave.png');
+        let saved = t.fake.saves.length;
+        let notified = 0;
+        t.recorder.subscribe(() => notified++);
+        assert.deepEqual(t.recorder.forgetJoin('dave.png'), { ok: true, applied: true });
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
+        assert.equal(t.fake.saves.length, saved + 1);
+        assert.deepEqual(t.fake.shownToasts().at(-1), { level: 'info', text: SCENE_TEXT.P24 });
+        assert.equal(t.recorder.joinStatus('dave.png').joinedAt, null);
+        assert.ok(notified > 0);
+
+        // While the host generates, the round's end saves it.
+        await t.fake.addMember('erin.png');
+        saved = t.fake.saves.length;
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        assert.deepEqual(t.recorder.forgetJoin('erin.png'), { ok: true, applied: true });
+        assert.equal(t.fake.saves.length, saved);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, saved + 1);
+        assert.deepEqual(t.fake.saves.at(-1).metadata[ROSTER_KEY].joined, []);
+
+        // For a chat that is not open, only the reveal pair is kept.
+        const other = JSON.stringify(['g1', 'other']);
+        assert.deepEqual(t.recorder.forgetJoin('dave.png', other), { ok: true, applied: false });
+        assert.deepEqual(t.fake.settings.get().scene_join_reveals, [[other, 'dave.png']]);
+        assert.equal(t.fake.saves.length, saved + 1);
+        assert.deepEqual(t.fake.shownToasts().at(-1), { level: 'info', text: SCENE_TEXT.P24 });
     });
 });
 
