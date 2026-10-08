@@ -12,10 +12,13 @@ export function isEmptySlot(message) {
     return version >= message.swipes.length && !isRecord(message.swipe_info?.[version]);
 }
 
+// The host's stand-in for a reply that has not streamed yet; a Stop before the first token leaves it in the chat.
+const isPlaceholder = message => isRecord(message) && !message.is_user && message.mes === '...';
+
 /**
  * Every scene memory chat save goes through here. It saves only a header seen loaded for the open chat,
- * never an empty chat or one whose newest line shows an empty swipe slot, and passes allowShrink only
- * right after a delete in the same chat.
+ * never an empty chat or one whose newest line is an empty swipe slot or a reply placeholder,
+ * and passes allowShrink only right after a delete in the same chat.
  */
 export function createChatSaver({ host, now = Date.now, log = console.warn }) {
     let loaded = new WeakMap();
@@ -38,7 +41,8 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
     async function save() {
         const key = currentKey();
         const chat = host.getContext().chat;
-        if (!isLoaded() || !Array.isArray(chat) || chat.length === 0 || isEmptySlot(chat[chat.length - 1])) return false;
+        const newest = Array.isArray(chat) ? chat[chat.length - 1] : undefined;
+        if (!isLoaded() || !newest || isEmptySlot(newest) || isPlaceholder(newest)) return false;
         // deleteMessage queued a debounced allowShrink save; this save replaces it (§J.4).
         const shrink = deleted?.key === key && now() - deleted.time <= DELETE_WINDOW_MS;
         // Header fields replaced while the save is in flight are not on disk yet; listeners judge by this copy.

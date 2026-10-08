@@ -154,6 +154,23 @@ describe('chat save gate', () => {
         assert.equal(fake.saves.length, 1);
     });
 
+    test('never saves while the newest line is a reply placeholder', async () => {
+        const { fake, saver } = await setup();
+        saver.adopt();
+        saver.markUnsaved();
+        fake.context.chat.push(fake.message({ avatar: 'bob.png', mes: '...' }));
+        assert.equal(await saver.flush(), false);
+        assert.equal(saver.hasUnsaved(), true);
+        assert.deepEqual(fake.saves, []);
+
+        fake.context.chat.at(-1).mes = '...and then he left.';
+        assert.equal(await saver.flush(), true);
+        fake.context.chat.push(fake.message({ is_user: true, mes: '...' }));
+        saver.markUnsaved();
+        assert.equal(await saver.flush(), true);
+        assert.equal(fake.saves.length, 2);
+    });
+
     test('reset clears the unsaved flag and the delete window', async () => {
         const { fake, saver } = await setup();
         saver.adopt();
