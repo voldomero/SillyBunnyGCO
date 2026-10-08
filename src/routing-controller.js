@@ -1,5 +1,5 @@
 /** Session-only routing. The host lease owns selection, sends, persistence and generation. */
-export function createRoutingController({ host, settings, scene, decide, canStart = () => true,
+export function createRoutingController({ host, settings, scene, decide, prepare, canStart = () => true,
     getFocus = () => [], onChange = () => {}, timeoutMs = 120000,
     setTimer = setTimeout, clearTimer = clearTimeout }) {
     let disposed = false;
@@ -119,6 +119,11 @@ export function createRoutingController({ host, settings, scene, decide, canStar
             || input.groupId !== record.groupId || input.chatId !== record.chatId || input.chat !== record.chat) return null;
         try {
             if (disposed || !canStart() || !sameScope(record) || !record.lease.isCurrent() || (!automatic && !staged)) return null;
+            // Scene memory applies the composer's presence changes before anything below is captured;
+            // a staged member who just left cancels this request through sync.
+            prepare?.({ text: input.text, key: record.key });
+            sync();
+            if (active !== request || request.invalid || record !== leaseRecord) return null;
             const roster = host.resolveMembers().map(member => ({ ...member }));
             const members = roster.map(member => {
                 const permission = scene?.canRespond(member.avatar, record.key);

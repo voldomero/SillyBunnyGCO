@@ -22,11 +22,11 @@ const header = joined => ({ integrity: 'fake-integrity', [ROSTER_KEY]: { v: 1, g
     known: [...FOUNDERS, ...joined.map(([avatar]) => avatar)], gone: [], joined } });
 
 /** A recorder over an existing fake host, as GCO starts after the chat may already be open. */
-function attach(fake) {
+function attach(fake, options = {}) {
     const logs = [];
     const scene = createSceneStore(fake);
     const recorder = createSceneRecorder({ host: fake.host, settings: fake.settings, scene,
-        now: fake.clock.now, log: (...args) => logs.push(args) });
+        now: fake.clock.now, log: (...args) => logs.push(args), ...options });
     return { fake, recorder, logs, scene };
 }
 
@@ -68,6 +68,11 @@ async function push(fake, line, event, ...args) {
 const wrapper = (fake, name, type) => fake.emit(name, { selected_group: 'g1', type });
 const started = (fake, type = 'normal') => wrapper(fake, 'GROUP_WRAPPER_STARTED', type);
 const finished = (fake, type = 'normal') => wrapper(fake, 'GROUP_WRAPPER_FINISHED', type);
+
+const statusOf = (t, avatar) => t.scene.getSnapshot().participants.find(member => member.avatar === avatar)?.status;
+const statusesOf = t => Object.fromEntries(t.scene.getSnapshot().participants.map(member => [member.avatar, member.status]));
+const keyOf = t => t.fake.host.activeConversation().key;
+const applied = { level: 'info', text: SCENE_TEXT.P11 };
 
 function switchChat(fake, chatId) {
     fake.context.chatId = chatId;
@@ -471,6 +476,12 @@ describe('scene recorder preview and status', () => {
         assert.equal(recorder.status().automatic, false);
         fake.settings.update({ scene_history: false });
         assert.equal(recorder.status().history, false);
+    });
+
+    test('reports automatic presence off while scene memory has no turn-on token', async () => {
+        const { recorder } = await setup({ settings: { scene_auto: true, scene_history_since: null } });
+        assert.equal(recorder.status().history, true);
+        assert.equal(recorder.status().automatic, false);
     });
 });
 
@@ -1135,6 +1146,504 @@ describe('scene recorder join wiring', () => {
         t.fake.settings.update({ scene_history: true, scene_history_since: NEW_TOKEN });
         assert.equal(t.fake.context.chatMetadata[ROSTER_KEY].since, TOKEN);
         assert.deepEqual(t.fake.saves, []);
+    });
+});
+
+describe('scene recorder automatic presence', () => {
+    const auto = (options = {}) => setup({ ...options, settings: { scene_auto: true, ...options.settings } });
+    const rows = t => t.recorder.getChanges().map(({ id, ...row }) => {
+        assert.equal(typeof id, 'string');
+        return row;
+    });
+
+    test('applies a change in a typed or natively routed line at once', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: ['carol.png'] });
+        const chat = () => t.fake.context.chat;
+
+        const sent = await t.fake.sendUser('Bob leaves.');
+        assert.deepEqual(note(chat()[sent]), { v: 1, away: ['carol.png'], moved: [['bob.png', 'unspecified', 'absent']] });
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        const sendas = await t.fake.receive('alice.png', 'Carol walks in.', 'command');
+        assert.deepEqual(note(chat()[sendas]), { v: 1, away: ['bob.png'], moved: [['carol.png', 'absent', 'present']] });
+        assert.deepEqual(entryNote(chat()[sendas], 0), note(chat()[sendas]));
+        assert.equal(statusOf(t, 'carol.png'), 'present');
+        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(rows(t), [
+            { avatar: 'bob.png', name: 'Bob', from: 'unspecified', to: 'absent', index: 3, excerpt: 'Bob leaves.', pending: false },
+            { avatar: 'carol.png', name: 'Carol', from: 'absent', to: 'present', index: 4, excerpt: 'Carol walks in.',
+                pending: false },
+        ]);
+        const ids = t.recorder.getChanges().map(change => change.id);
+        assert.notEqual(ids[0], ids[1]);
+
+        // Native routing: the wrapper sends the line, but no routed plan ran, so nothing waits for the round.
+        t.fake.setGenerating(true);
+        await t.fake.sendUser('Bob comes back.');
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.equal(t.fake.toasts.length, 3);
+    });
+
+    test('attaches planned changes to the sent line and queues the rest', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+        t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+        assert.equal(statusOf(t, 'alice.png'), 'present');
+        assert.deepEqual(t.fake.toasts, [applied]);
+
+        t.fake.setGenerating(true);
+        // A macro expanded after the plan ran: the sent text names Bob too.
+        const id = await t.fake.sendUser('Alice walks in. Bob leaves.');
+        assert.deepEqual(note(t.fake.context.chat[id]),
+            { v: 1, moved: [['alice.png', 'absent', 'present'], ['bob.png', 'unspecified', 'absent']] });
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(rows(t).map(({ avatar, pending }) => [avatar, pending]), [['alice.png', false], ['bob.png', true]]);
+
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Evening.');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'absent']);
+        assert.deepEqual(t.fake.toasts, [applied, applied]);
+        assert.deepEqual(rows(t).map(({ avatar, pending }) => [avatar, pending]), [['alice.png', false], ['bob.png', false]]);
+    });
+
+    test('takes back planned changes that no line carried', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+        t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+        assert.equal(statusOf(t, 'alice.png'), 'present');
+        // A bias-only send emits no MESSAGE_SENT.
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Evening.');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'alice.png'), 'absent');
+        assert.deepEqual(t.fake.toasts, [applied]);
+
+        t.recorder.prepareTurn({ text: 'Alice walks in.', key: JSON.stringify(['g1', 'another chat']) });
+        t.recorder.prepareTurn({ text: 42, key: keyOf(t) });
+        assert.equal(statusOf(t, 'alice.png'), 'absent');
+        assert.equal(t.fake.toasts.length, 1);
+    });
+
+    test('notes later lines of a round as if a queued change had happened', async () => {
+        const t = await auto();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })], { absent: [] });
+        const chat = () => t.fake.context.chat;
+        await started(t.fake);
+        const left = await t.fake.receive('alice.png', 'Bob heads out.');
+        const after = await t.fake.receive('carol.png', 'Quiet now.');
+        assert.deepEqual(note(chat()[left]), { v: 1, moved: [['bob.png', 'unspecified', 'absent']] });
+        assert.deepEqual(note(chat()[after]), noted('bob.png'));
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(rows(t), [
+            { avatar: 'bob.png', name: 'Bob', from: 'unspecified', to: 'absent', index: 1, excerpt: 'Bob heads out.', pending: true },
+        ]);
+
+        // Bob still sees his own line, and his return is read against the queued departure.
+        const back = await t.fake.receive('bob.png', 'Bob comes back.');
+        assert.deepEqual(note(chat()[back]), { v: 1, moved: [['bob.png', 'absent', 'present']] });
+        const last = await t.fake.receive('carol.png', 'Welcome back.');
+        assert.equal(note(chat()[last]), undefined);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(t.fake.toasts, []);
+
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.deepEqual(t.fake.toasts, [applied]);
+        assert.deepEqual(rows(t).map(({ index, pending }) => [index, pending]), [[3, false]]);
+    });
+
+    test('drops queued and planned changes when automatic presence is switched off mid-round', async () => {
+        const switches = fake => [
+            ['automatic off and on', () => fake.settings.update({ scene_auto: false }),
+                () => fake.settings.update({ scene_auto: true })],
+            ['memory off and on', () => fake.settings.update({ scene_history: false }),
+                () => fake.settings.update({ scene_history: true })],
+            ['scene controls off', () => fake.settings.update({ scene_controls: false }), () => {}],
+            ['wrapper events gone', () => delete fake.context.eventTypes.GROUP_WRAPPER_STARTED, () => {}],
+        ];
+        for (let which = 0; which < 4; which++) {
+            const t = await auto();
+            const [label, off, on] = switches(t.fake)[which];
+            await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+            t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+            t.fake.setGenerating(true);
+            await started(t.fake);
+            await t.fake.receive('carol.png', 'Bob heads out.');
+            assert.equal(rows(t).at(-1).pending, true, label);
+
+            off();
+            on();
+            t.fake.setGenerating(false);
+            await finished(t.fake);
+            assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'unspecified'], label);
+            assert.deepEqual(t.fake.toasts, [applied], label);
+            assert.equal(t.recorder.getChanges().some(change => change.pending), false, label);
+        }
+    });
+
+    test('drops what waits when the chat changes mid-round', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+        t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+        await started(t.fake);
+        await t.fake.receive('carol.png', 'Bob heads out.');
+        switchChat(t.fake, 'c2');
+        await t.fake.openChat(lines3(t.fake));
+        switchChat(t.fake, 'c1');
+        await t.fake.openChat(lines3(t.fake));
+        await finished(t.fake);
+        assert.deepEqual([statusOf(t, 'alice.png'), statusOf(t, 'bob.png')], ['present', 'unspecified']);
+        assert.deepEqual(t.fake.toasts, [applied]);
+    });
+
+    test('holds the drain until every hold is released', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: [] });
+        const first = t.recorder.hold();
+        const second = t.recorder.hold();
+        await started(t.fake);
+        await t.fake.receive('alice.png', 'Bob heads out.');
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        first();
+        first();
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        second();
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(t.fake.toasts, [applied]);
+
+        // While an Ask runs, a typed line's change waits too.
+        const third = t.recorder.hold();
+        await t.fake.sendUser('Bob comes back.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        third();
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.equal(t.fake.toasts.length, 2);
+    });
+
+    test('never detects in quiet results, impersonation drafts or loaded history', async () => {
+        const t = await auto();
+        const chat = () => t.fake.context.chat;
+        await openScene(t, [
+            t.fake.message({ avatar: 'alice.png', mes: 'Bob leaves.', send_date: iso(START - 2000) }),
+            t.fake.message({ is_user: true, mes: 'Carol leaves.', send_date: iso(START - 1000) }),
+        ], { absent: [] });
+        t.fake.settings.update({ scene_history: false });
+        t.fake.settings.update({ scene_history: true });
+
+        await t.fake.receive('alice.png', 'Bob leaves.', 'quiet');
+        await t.fake.receive('alice.png', 'Bob leaves.', 'impersonate');
+        for (const type of ['quiet', 'impersonate']) {
+            await started(t.fake, type);
+            await t.fake.receive('alice.png', 'Bob leaves.', 'normal', { emitEvent: false });
+            await finished(t.fake, type);
+        }
+        await push(t.fake, t.fake.message({ mes: 'Bob leaves.', is_system: true, type: 'comment' }), 'MESSAGE_SENT');
+        await push(t.fake, t.fake.message({ avatar: 'carol.png', mes: 'Bob leaves.', is_system: true }),
+            'MESSAGE_RECEIVED', 'command');
+        await t.fake.sendUser('Bob leaves.', { at: 1 });
+        await t.fake.receive('carol.png', 'Bob leaves.', 'command', { at: 1 });
+        // A greeting is the card's opening text, not something happening in the scene.
+        await push(t.fake, t.fake.message({ avatar: 'carol.png', mes: 'Bob leaves.' }), 'MESSAGE_RECEIVED', 'first_message');
+
+        assert.deepEqual(statusesOf(t), { 'alice.png': 'unspecified', 'bob.png': 'unspecified', 'carol.png': 'unspecified' });
+        assert.deepEqual(t.fake.toasts, []);
+        assert.equal(chat().some(line => note(line)?.moved), false);
+        assert.deepEqual(t.recorder.getChanges(), []);
+    });
+
+    test('detects nothing while automatic presence is off or unavailable', async () => {
+        const cases = [
+            [{ scene_auto: false }, () => {}],
+            [{ scene_history_since: null }, () => {}],
+            [{}, fake => delete fake.context.eventTypes.GROUP_WRAPPER_STARTED],
+        ];
+        for (const [settings, change] of cases) {
+            const t = await auto({ settings });
+            await openScene(t, lines3(t.fake), { absent: ['carol.png'] });
+            change(t.fake);
+            t.recorder.prepareTurn({ text: 'Carol walks in.', key: keyOf(t) });
+            const id = await t.fake.sendUser('Bob leaves.');
+            await started(t.fake);
+            await t.fake.receive('alice.png', 'Carol walks in.');
+            await finished(t.fake);
+            assert.deepEqual(note(t.fake.context.chat[id]), noted('carol.png'), JSON.stringify(settings));
+            assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['unspecified', 'absent'], JSON.stringify(settings));
+            assert.deepEqual(t.fake.toasts, [], JSON.stringify(settings));
+        }
+    });
+
+    test('a continue queues only changes its line does not list yet', async () => {
+        const t = await auto();
+        const undone = t.fake.message({ avatar: 'alice.png', mes: 'Carol walks in.', send_date: iso(START - 1000),
+            extra: { sbu_scene: { v: 1, undone: ['carol.png'] } } });
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }), undone],
+            { absent: ['carol.png'] });
+        const chat = () => t.fake.context.chat;
+
+        // The user undid Carol's arrival on this line; continuing it never brings that back.
+        await started(t.fake, 'continue');
+        await t.fake.continueLine(1, ' Then Bob leaves.');
+        assert.deepEqual(note(chat()[1]), { v: 1, moved: [['bob.png', 'unspecified', 'absent']], undone: ['carol.png'] });
+        await finished(t.fake, 'continue');
+        assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['absent', 'absent']);
+
+        await started(t.fake);
+        const id = await t.fake.receive('alice.png', 'Bob comes back.');
+        await t.fake.continueLine(id, ' Carol walks in.');
+        assert.deepEqual(note(chat()[id]).moved, [['bob.png', 'absent', 'present'], ['carol.png', 'absent', 'present']]);
+        await finished(t.fake);
+        assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['present', 'present']);
+        assert.deepEqual(t.fake.toasts, [applied, applied]);
+    });
+
+    test('reads changes in a stopped stream and in an unread version', async () => {
+        const t = await auto();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })], { absent: [] });
+        const chat = () => t.fake.context.chat;
+        await started(t.fake);
+        const stopped = await t.fake.receive('alice.png', 'Bob heads out.', 'normal', { emitEvent: false });
+        await finished(t.fake);
+        assert.deepEqual(note(chat()[stopped]).moved, [['bob.png', 'unspecified', 'absent']]);
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+
+        const id = await t.fake.receive('carol.png', 'Hi.', 'normal', { alternatives: ['Bob comes back.'] });
+        await t.fake.swipeTo(id, 1);
+        assert.deepEqual(note(chat()[id]), { v: 1, moved: [['bob.png', 'absent', 'present']] });
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.deepEqual(t.fake.toasts, [applied, applied]);
+    });
+
+    test('applies a queued change only while its line lists it and the live status allows it', async () => {
+        const t = await auto();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })], { absent: [] });
+        const chat = () => t.fake.context.chat;
+        await started(t.fake);
+        const gone = await t.fake.receive('alice.png', 'Carol heads out.');
+        await t.fake.receive('carol.png', 'Bob heads out.');
+        const swiped = await t.fake.receive('bob.png', 'Alice heads out.', 'normal', { alternatives: ['Hm.'] });
+        // Deleted, marked remote by hand, and swiped to another version while the round runs.
+        chat().splice(gone, 1);
+        await t.fake.emit('MESSAGE_DELETED', gone);
+        assert.equal(t.scene.setState('bob.png', 'remote').ok, true);
+        await t.fake.swipeTo(swiped - 1, 1);
+        await finished(t.fake);
+        assert.deepEqual(statusesOf(t), { 'alice.png': 'unspecified', 'bob.png': 'remote', 'carol.png': 'unspecified' });
+        assert.deepEqual(t.fake.toasts, []);
+    });
+
+    test('reads members by their Reply Rules aliases, and first person only as a character\'s author', async () => {
+        const t = await auto({ settings: { reply_rules: { characters: { 'alice.png': { aliases: ['Ally'] } } } } });
+        await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+        await t.fake.sendUser('Ally walks in.');
+        assert.equal(statusOf(t, 'alice.png'), 'present');
+
+        await t.fake.sendUser('I head out.');
+        await push(t.fake, t.fake.message({ mes: 'I head out.', type: 'narrator' }), 'MESSAGE_SENT');
+        assert.deepEqual(statusesOf(t), { 'alice.png': 'present', 'bob.png': 'unspecified', 'carol.png': 'unspecified' });
+        await t.fake.receive('carol.png', 'I head out.', 'command');
+        assert.equal(statusOf(t, 'carol.png'), 'absent');
+
+        // A member who shares the persona's name is never read from text.
+        t.fake.context.name1 = 'Bob';
+        await t.fake.sendUser('Bob leaves.');
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+    });
+
+    test('a detector error changes nothing', async () => {
+        const fake = await createFakeHost({ settings: { scene_auto: true } });
+        const t = attach(fake, { detect: () => { throw new Error('detector broke'); } });
+        await openScene(t, lines3(fake), { absent: ['carol.png'] });
+        t.recorder.prepareTurn({ text: 'Carol walks in.', key: keyOf(t) });
+        const id = await fake.sendUser('Bob leaves.');
+        assert.deepEqual(note(fake.context.chat[id]), noted('carol.png'));
+        assert.deepEqual([statusOf(t, 'bob.png'), statusOf(t, 'carol.png')], ['unspecified', 'absent']);
+        assert.deepEqual(fake.toasts, []);
+        assert.equal(t.logs.length, 1);
+    });
+
+    const hello = fake => [fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })];
+
+    test('names a member\'s departure and return on one line apart', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = () => t.fake.context.chat;
+        const ids = () => new Set(t.recorder.getChanges().map(change => change.id));
+
+        // Auto-continue in a native round: both changes wait on the same line.
+        await started(t.fake);
+        const both = await t.fake.receive('alice.png', 'Bob heads out.');
+        await t.fake.continueLine(both, ' Later, Bob comes back.');
+        assert.deepEqual(note(chat()[both]).moved, [['bob.png', 'unspecified', 'absent'], ['bob.png', 'absent', 'present']]);
+        assert.deepEqual(rows(t).map(({ to, pending }) => [to, pending]), [['absent', true], ['present', true]]);
+        assert.equal(ids().size, 2);
+        await finished(t.fake);
+
+        // A Continue round on a line whose departure already applied.
+        const left = await t.fake.receive('carol.png', 'Bob heads out.', 'command');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        await started(t.fake, 'continue');
+        await t.fake.continueLine(left, ' Then Bob comes back.');
+        assert.deepEqual(rows(t).map(({ index, to, pending }) => [index, to, pending]),
+            [[left, 'absent', false], [left, 'present', true]]);
+        assert.equal(ids().size, 2);
+    });
+
+    test('takes a change that never applies back out of the notes, so it hides nothing', async () => {
+        const cases = [
+            ['automatic off', 'unspecified', t => t.fake.settings.update({ scene_auto: false })],
+            ['memory off and on', 'unspecified', t => {
+                t.fake.settings.update({ scene_history: false });
+                t.fake.settings.update({ scene_history: true });
+            }],
+            ['wrapper events gone', 'unspecified', t => delete t.fake.context.eventTypes.GROUP_WRAPPER_STARTED],
+            ['marked remote by hand', 'remote', t => assert.equal(t.scene.setState('bob.png', 'remote').ok, true)],
+            ['line deleted', 'unspecified', t => {
+                t.fake.context.chat.splice(1, 1);
+                return t.fake.emit('MESSAGE_DELETED', 1);
+            }],
+        ];
+        for (const [label, status, change] of cases) {
+            const t = await auto();
+            await openScene(t, hello(t.fake), { absent: [] });
+            const chat = () => t.fake.context.chat;
+            await started(t.fake);
+            const left = chat()[await t.fake.receive('alice.png', 'Bob heads out.')];
+            const later = chat()[await t.fake.receive('carol.png', 'Quiet now.')];
+            assert.deepEqual(note(later), noted('bob.png'), label);
+
+            await change(t);
+            await finished(t.fake);
+            assert.equal(statusOf(t, 'bob.png'), status, label);
+            if (chat().includes(left)) assert.equal(note(left), undefined, label);
+            assert.equal(note(later), undefined, label);
+            assert.equal(entryNote(later, 0), undefined, label);
+            assert.equal(t.recorder.filter(promptOf(chat()), 'normal', 'bob.png'), 0, label);
+            assert.deepEqual(t.recorder.getChanges(), [], label);
+            assert.deepEqual(t.fake.toasts, [], label);
+            assert.equal(t.fake.saves.length, 1, label);
+        }
+    });
+
+    test('shows lines again only to a member whom a dropped departure alone made absent', async () => {
+        // Bob is away; in one round he comes back, leaves again, and a later line is noted against both.
+        const roundWithReturn = async () => {
+            const t = await auto();
+            await openScene(t, hello(t.fake), { absent: ['bob.png'] });
+            const chat = () => t.fake.context.chat;
+            await started(t.fake);
+            await t.fake.receive('alice.png', 'Bob comes back.');
+            const left = await t.fake.receive('carol.png', 'Bob heads out.');
+            const later = chat()[await t.fake.receive('alice.png', 'Quiet now.')];
+            assert.deepEqual(note(later), noted('bob.png'));
+            return { t, left, later };
+        };
+
+        // Only the departure goes: Bob is back, so the later line no longer hides from him.
+        const back = await roundWithReturn();
+        back.t.fake.context.chat.splice(back.left, 1);
+        await back.t.fake.emit('MESSAGE_DELETED', back.left);
+        await finished(back.t.fake);
+        assert.equal(statusOf(back.t, 'bob.png'), 'present');
+        assert.equal(note(back.later), undefined);
+
+        // Both go: Bob never came back, so the later line still hides from him.
+        const away = await roundWithReturn();
+        away.t.fake.settings.update({ scene_auto: false });
+        await finished(away.t.fake);
+        assert.equal(statusOf(away.t, 'bob.png'), 'absent');
+        assert.deepEqual(note(away.later), noted('bob.png'));
+    });
+
+    test('takes a departure that waited for an Ask out of the notes, and saves at once', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const chat = () => t.fake.context.chat;
+        const waitForAsk = async () => {
+            const release = t.recorder.hold();
+            await started(t.fake);
+            const left = await t.fake.receive('alice.png', 'Bob heads out.');
+            const later = chat()[await t.fake.receive('carol.png', 'Quiet now.')];
+            await finished(t.fake);
+            assert.deepEqual(note(later), noted('bob.png'));
+            return { release, left, later };
+        };
+
+        // The line goes before the Ask settles.
+        const first = await waitForAsk();
+        chat().splice(first.left, 1);
+        await t.fake.emit('MESSAGE_DELETED', first.left);
+        assert.equal(t.fake.saves.length, 0);
+        first.release();
+        assert.equal(note(first.later), undefined);
+        assert.equal(t.fake.saves.length, 1);
+
+        // Automatic presence is switched off before the Ask settles.
+        const second = await waitForAsk();
+        t.fake.settings.update({ scene_auto: false });
+        assert.equal(note(second.later), undefined);
+        assert.equal(note(chat()[second.left]), undefined);
+        assert.equal(t.fake.saves.length, 2);
+        second.release();
+        assert.equal(statusOf(t, 'bob.png'), 'unspecified');
+        assert.deepEqual(t.fake.toasts, []);
+    });
+
+    test('keeps a round\'s changes for its end when scene memory turns on during it', async () => {
+        for (const key of ['scene_history', 'scene_controls']) {
+            const t = await auto({ settings: { [key]: false } });
+            await openScene(t, hello(t.fake), { absent: [] });
+            await started(t.fake);
+            t.fake.settings.update({ [key]: true });
+            await t.fake.receive('carol.png', 'Bob heads out.');
+            assert.equal(statusOf(t, 'bob.png'), 'unspecified', key);
+            assert.deepEqual(t.fake.toasts, [], key);
+            await finished(t.fake);
+            assert.equal(statusOf(t, 'bob.png'), 'absent', key);
+            assert.deepEqual(t.fake.toasts, [applied], key);
+        }
+    });
+
+    test('tells its views each time the changes list moves without a scene write', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake), { absent: [] });
+        const shown = [];
+        t.recorder.subscribe(() => shown.push(JSON.stringify(t.recorder.getChanges())));
+        const upToDate = step => assert.equal(shown.at(-1), JSON.stringify(t.recorder.getChanges()), step);
+
+        await started(t.fake);
+        await t.fake.receive('alice.png', 'Bob heads out.');
+        upToDate('queued');
+        await finished(t.fake);
+        upToDate('drained');
+
+        await started(t.fake);
+        await t.fake.receive('alice.png', 'Carol heads out.');
+        t.fake.settings.update({ scene_auto: false });
+        upToDate('switched off');
+        t.fake.settings.update({ scene_auto: true });
+        await t.fake.receive('alice.png', 'Bob comes back.');
+        upToDate('queued again');
+        await t.fake.openChat(hello(t.fake));
+        upToDate('chat changed');
+    });
+
+    test('leaves planned changes to the user\'s line, not a narrator line sent before it', async () => {
+        const t = await auto();
+        await openScene(t, lines3(t.fake), { absent: ['alice.png'] });
+        t.recorder.prepareTurn({ text: 'Alice walks in.', key: keyOf(t) });
+        assert.equal(statusOf(t, 'alice.png'), 'present');
+        const sys = await push(t.fake, t.fake.message({ mes: 'The lights flicker.', type: 'narrator' }), 'MESSAGE_SENT');
+        assert.equal(note(t.fake.context.chat[sys]), undefined);
+
+        // The bias-only send that followed wrote no line, so the planned arrival is taken back.
+        await started(t.fake);
+        await finished(t.fake);
+        assert.equal(statusOf(t, 'alice.png'), 'absent');
     });
 });
 

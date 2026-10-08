@@ -1,6 +1,6 @@
 /** Coordinate manual requests, suggestions and the optional versioned host routing lease. */
-export function createTurnController({ host, settings, decide, scene, suggestions, createRoutingController, timeoutMs = 120000,
-    setTimer = setTimeout, clearTimer = clearTimeout }) {
+export function createTurnController({ host, settings, decide, scene, suggestions, createRoutingController, sceneMemory,
+    timeoutMs = 120000, setTimer = setTimeout, clearTimer = clearTimeout }) {
     let disposed = false;
     let epoch = 0;
     let active;
@@ -22,7 +22,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         const cards = rules().characters;
         return !cards || !Object.hasOwn(cards, avatar) || cards[avatar]?.enabled !== false;
     };
-    const routing = createRoutingController?.({ host, settings, scene, decide,
+    const routing = createRoutingController?.({ host, settings, scene, decide, prepare: sceneMemory?.prepareTurn,
         canStart: () => !disposed && !active, getFocus: () => [...focus], onChange: notify,
         timeoutMs, setTimer, clearTimer });
     // On hosts with a speaker bar, its pick is the one next responder for both the bar and these controls.
@@ -116,9 +116,12 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         }, timeoutMs);
         // Even after timeout/invalidation the lock lasts until the original host call settles.
         const execution = (async () => {
+            let release;
             try {
                 // A view listener may clear or disable the request during the initial notification.
                 if (request.abort.signal.aborted) return { ok: false, status: 'invalidated', reason: 'The request is no longer current.' };
+                // Scene memory holds presence changes from the asked reply until this request has settled.
+                release = sceneMemory?.hold();
                 const result = await (request.nativeCancellation
                     ? host.askToRespond(avatar, request.key, { signal: request.abort.signal })
                     : host.askToRespond(avatar, request.key));
@@ -137,6 +140,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
             } finally {
                 clearTimer(timer);
                 if (active === request) active = undefined;
+                release?.();
                 if (!disposed) notify();
             }
         })();
