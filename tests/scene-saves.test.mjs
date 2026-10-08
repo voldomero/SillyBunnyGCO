@@ -125,6 +125,35 @@ describe('chat save gate', () => {
         assert.notEqual(carried[0], fake.context.chatMetadata);
     });
 
+    test('clearUnsaved keeps the delete window open', async () => {
+        const { fake, saver } = await setup();
+        saver.adopt();
+        saver.markUnsaved();
+        saver.noteDelete();
+        saver.clearUnsaved();
+        assert.equal(saver.hasUnsaved(), false);
+        await saver.save();
+        assert.deepEqual(fake.saves.map(save => save.options), [{ allowShrink: true }]);
+    });
+
+    test('never saves while the newest line shows a version the host has not stored', async () => {
+        const { fake, saver } = await setup();
+        saver.adopt();
+        saver.markUnsaved();
+        const line = fake.context.chat[0];
+        line.swipe_id = 1;
+        line.mes = '...';
+        assert.equal(await saver.save(), false);
+        assert.equal(await saver.flush(), false);
+        assert.equal(saver.hasUnsaved(), true);
+        assert.deepEqual(fake.saves, []);
+
+        line.swipe_id = 0;
+        line.mes = 'Hello.';
+        assert.equal(await saver.flush(), true);
+        assert.equal(fake.saves.length, 1);
+    });
+
     test('reset clears the unsaved flag and the delete window', async () => {
         const { fake, saver } = await setup();
         saver.adopt();

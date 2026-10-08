@@ -9,20 +9,82 @@ import { createFakeHost } from './helpers/fake-host.mjs';
 
 const START = Date.UTC(2026, 9, 8, 1, 0, 0);
 const TOKEN = '2026-10-08T00:00:00.000Z';
+const NEW_TOKEN = '2026-10-08T02:00:00.000Z';
 const FOUNDERS = ['alice.png', 'bob.png', 'carol.png'];
 const WITH_DAVE = [...FOUNDERS, 'dave.png'];
 const iso = ms => new Date(ms).toISOString();
 const away = (...avatars) => ({ sbu_scene: { v: 1, away: avatars } });
+const noted = (...avatars) => ({ v: 1, away: avatars });
+const note = line => line?.extra?.sbu_scene;
+const entryNote = (line, index) => line?.swipe_info?.[index]?.extra?.sbu_scene;
 const promptOf = chat => chat.map(message => ({ ...message }));
 const header = joined => ({ integrity: 'fake-integrity', [ROSTER_KEY]: { v: 1, group: 'g1', since: TOKEN, floor: null,
     known: [...FOUNDERS, ...joined.map(([avatar]) => avatar)], gone: [], joined } });
 
-async function setup(options = {}) {
-    const fake = await createFakeHost(options);
+/** A recorder over an existing fake host, as GCO starts after the chat may already be open. */
+function attach(fake) {
     const logs = [];
-    const recorder = createSceneRecorder({ host: fake.host, settings: fake.settings, scene: createSceneStore(fake),
+    const scene = createSceneStore(fake);
+    const recorder = createSceneRecorder({ host: fake.host, settings: fake.settings, scene,
         now: fake.clock.now, log: (...args) => logs.push(args) });
-    return { fake, recorder, logs };
+    return { fake, recorder, logs, scene };
+}
+
+async function setup(options = {}) {
+    return attach(await createFakeHost(options));
+}
+
+/** Alice, the user and Bob, one second apart; Bob's line is a second before the fake clock starts. */
+function lines3(fake) {
+    return [
+        fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 3000) }),
+        fake.message({ is_user: true, mes: 'Hi.', send_date: iso(START - 2000) }),
+        fake.message({ avatar: 'bob.png', mes: 'Hey.', send_date: iso(START - 1000) }),
+    ];
+}
+
+/** Open a chat and mark members away in its scene (Bob unless stated). */
+async function openScene(t, lines, { absent = ['bob.png'], metadata } = {}) {
+    await t.fake.openChat(lines, metadata);
+    for (const avatar of absent) assert.equal(t.scene.setState(avatar, 'absent').ok, true, avatar);
+}
+
+/** Extra versions of a line, as a loaded chat holds them. */
+function withVersions(line, ...texts) {
+    for (const text of texts) {
+        line.swipes.push(text);
+        line.swipe_info.push({ send_date: line.send_date, extra: {} });
+    }
+    return line;
+}
+
+/** Push a line and announce it with `event`, as the host's appending paths do. */
+async function push(fake, line, event, ...args) {
+    const id = fake.context.chat.push(line) - 1;
+    await fake.emit(event, id, ...args);
+    return id;
+}
+
+const wrapper = (fake, name, type) => fake.emit(name, { selected_group: 'g1', type });
+const started = (fake, type = 'normal') => wrapper(fake, 'GROUP_WRAPPER_STARTED', type);
+const finished = (fake, type = 'normal') => wrapper(fake, 'GROUP_WRAPPER_FINISHED', type);
+
+function switchChat(fake, chatId) {
+    fake.context.chatId = chatId;
+    fake.group.chat_id = chatId;
+}
+
+/** Saves that finish a few milliseconds later, each keeping a copy of the chat and header it was given. */
+function slowSaves(fake) {
+    const done = [];
+    fake.context.saveChat = async options => {
+        const chat = structuredClone(fake.context.chat);
+        const metadata = structuredClone(fake.context.chatMetadata);
+        await new Promise(resolve => setTimeout(resolve, 5));
+        done.push({ options, chat, metadata });
+        return true;
+    };
+    return done;
 }
 
 /** A prompt item whose `extra` getter throws `thrown`, as a broken extension property might. */
@@ -409,6 +471,670 @@ describe('scene recorder preview and status', () => {
         assert.equal(recorder.status().automatic, false);
         fake.settings.update({ scene_history: false });
         assert.equal(recorder.status().history, false);
+    });
+});
+
+describe('scene recorder recording', () => {
+    test('records a wrapper-sent user line and leaves the save to the host', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        const sent = await t.fake.sendUser('Hi.');
+        assert.deepEqual(note(t.fake.context.chat[sent]), noted('bob.png'));
+        assert.deepEqual(t.fake.saves, []);
+        await started(t.fake);
+        const reply = await t.fake.receive('alice.png', 'Hi there.');
+        assert.deepEqual(note(t.fake.context.chat[reply]), noted('bob.png'));
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        // The host saved the reply, and the user line's note with it.
+        assert.deepEqual(t.fake.saves, []);
+
+        // Nobody answered: the wrapper ends without a reply save, so the round end saves the note.
+        t.fake.setGenerating(true);
+        await t.fake.sendUser('Anyone?');
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.deepEqual(t.fake.saves.map(save => save.options), [{}]);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 1);
+    });
+
+    test('saves a typed /send before returning', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 1000) })]);
+        const done = slowSaves(t.fake);
+        const chat = () => t.fake.context.chat;
+
+        const sent = await t.fake.sendUser('Psst.');
+        assert.equal(done.length, 1);
+        assert.deepEqual(done[0].options, {});
+        assert.deepEqual(note(done[0].chat[sent]), noted('bob.png'));
+
+        const narrator = await push(t.fake, t.fake.message({ mes: 'The door creaks.', type: 'narrator' }), 'MESSAGE_SENT');
+        assert.deepEqual(note(chat()[narrator]), noted('bob.png'));
+        assert.equal(done.length, 2);
+
+        const sendas = await t.fake.receive('carol.png', 'Hm.', 'command');
+        assert.deepEqual(note(chat()[sendas]), noted('bob.png'));
+        assert.deepEqual(entryNote(chat()[sendas], 0), noted('bob.png'));
+        assert.equal(done.length, 3);
+
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        const plain = await t.fake.sendUser('Nobody is away.');
+        assert.equal(note(chat()[plain]), undefined);
+        assert.equal(done.length, 3);
+    });
+
+    test('copies the neighbour\'s after-state into an inserted line, minus its author', async () => {
+        const t = await setup();
+        await openScene(t, [
+            t.fake.message({ avatar: 'alice.png', mes: 'One.', send_date: iso(START - 2000),
+                extra: { sbu_scene: { v: 1, away: ['bob.png'], moved: [['carol.png', 'present', 'absent']] } } }),
+            t.fake.message({ is_user: true, mes: 'Two.', send_date: iso(START - 1000) }),
+        ], { absent: [] });
+        const done = slowSaves(t.fake);
+        const chat = () => t.fake.context.chat;
+
+        assert.equal(await t.fake.receive('carol.png', 'Carol, inserted.', 'command', { at: 1 }), 1);
+        assert.deepEqual(note(chat()[1]), noted('bob.png'));
+        assert.deepEqual(entryNote(chat()[1], 0), noted('bob.png'));
+        assert.equal(done.length, 1);
+        assert.deepEqual(note(done[0].chat[1]), noted('bob.png'));
+
+        assert.equal(await t.fake.sendUser('User, inserted.', { at: 1 }), 1);
+        assert.deepEqual(note(chat()[1]), noted('bob.png', 'carol.png'));
+        assert.equal(done.length, 2);
+        assert.equal(note(chat()[3]), undefined);
+    });
+
+    test('ignores comments and hidden lines', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 1000) })]);
+        const comment = t.fake.message({ mes: 'An aside.', is_system: true, type: 'comment' });
+        await push(t.fake, comment, 'MESSAGE_SENT');
+        const biasOnly = t.fake.message({ avatar: 'carol.png', mes: '', is_system: true });
+        await push(t.fake, biasOnly, 'MESSAGE_RECEIVED', 'command');
+        assert.equal(note(comment), undefined);
+        assert.equal(note(biasOnly), undefined);
+        assert.deepEqual(t.fake.saves, []);
+        const shown = await t.fake.sendUser('Hello again.');
+        assert.deepEqual(note(t.fake.context.chat[shown]), noted('bob.png'));
+    });
+
+    test('records a new reply\'s shown version and marks it read', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        await started(t.fake);
+        const id = await t.fake.receive('alice.png', 'Hello.');
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+        // An absent author still saw their own line.
+        const own = await t.fake.receive('bob.png', 'I am off.');
+        assert.equal(note(t.fake.context.chat[own]), undefined);
+
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        assert.equal(t.scene.setState('carol.png', 'absent').ok, true);
+        await t.fake.emit('MESSAGE_RECEIVED', id, 'normal');
+        await finished(t.fake);
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.equal(note(t.fake.context.chat[own]), undefined);
+    });
+
+    test('saves after recording a greeting only when it wrote something', async () => {
+        const t = await setup();
+        const greeting = () => t.fake.message({ avatar: 'alice.png', mes: 'Welcome.' });
+        await t.fake.openChat([greeting()]);
+        await t.fake.emit('MESSAGE_RECEIVED', 0, 'first_message');
+        assert.equal(note(t.fake.context.chat[0]), undefined);
+        assert.deepEqual(t.fake.saves, []);
+
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        const done = slowSaves(t.fake);
+        // The host pushes the greeting before CHAT_CHANGED and announces it after.
+        await t.fake.openChat([greeting()]);
+        await t.fake.emit('MESSAGE_RECEIVED', 0, 'first_message');
+        assert.deepEqual(note(t.fake.context.chat[0]), noted('bob.png'));
+        assert.equal(done.length, 1);
+    });
+
+    test('drops the inherited record when a swipe generates and records the new version', async () => {
+        const t = await setup();
+        await openScene(t, [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            t.fake.message({ avatar: 'alice.png', mes: 'Old.', send_date: iso(START - 1000), extra: away('bob.png') }),
+        ], { absent: [] });
+        const line = t.fake.context.chat[1];
+        await t.fake.swipeGenerate(1);
+        assert.equal(line.mes, '...');
+        assert.equal(note(line), undefined);
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+
+        assert.equal(t.scene.setState('carol.png', 'absent').ok, true);
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(1, 'New.', { streaming: false });
+        assert.deepEqual(note(line), noted('carol.png'));
+        await finished(t.fake, 'swipe');
+        assert.deepEqual([entryNote(line, 0), entryNote(line, 1)], [noted('bob.png'), noted('carol.png')]);
+    });
+
+    test('tells a generating swipe by its empty slot, not by its text', async () => {
+        const t = await setup();
+        const silent = { name: 'Carol', is_user: false, original_avatar: 'carol.png', mes: '...', swipe_id: 0, swipes: ['...'],
+            send_date: iso(START - 1500), extra: away('bob.png') };
+        await openScene(t, [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            silent,
+            t.fake.message({ avatar: 'alice.png', mes: 'Old.', send_date: iso(START - 1000), extra: away('bob.png') }),
+        ], { absent: [] });
+        await t.fake.emit('MESSAGE_SWIPED', 1);
+        assert.deepEqual(note(silent), noted('bob.png'));
+
+        // Upstream-style hosts show '...' only on screen and leave the old version's text in the line.
+        const line = t.fake.context.chat[2];
+        assert.equal(t.scene.setState('carol.png', 'absent').ok, true);
+        await t.fake.swipeGenerate(2, { keepText: true });
+        assert.equal(line.mes, 'Old.');
+        assert.equal(note(line), undefined);
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+
+        // The new version is recorded when its reply arrives, not when the swipe starts.
+        assert.equal(t.scene.setState('carol.png', 'present').ok, true);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(2, 'New.');
+        assert.deepEqual(note(line), noted('bob.png'));
+    });
+
+    test('never records or saves a swipe slot that got no reply', async () => {
+        const t = await setup();
+        await openScene(t, [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            t.fake.message({ avatar: 'alice.png', mes: 'Old.', send_date: iso(START - 1000) }),
+        ]);
+        const line = t.fake.context.chat[1];
+        // The request failed or was stopped before any reply: the round ends on the empty slot.
+        await t.fake.swipeGenerate(1);
+        await started(t.fake, 'swipe');
+        await finished(t.fake, 'swipe');
+        assert.equal(note(line), undefined);
+        assert.deepEqual(t.fake.saves, []);
+
+        t.fake.revertSwipe(1);
+        assert.deepEqual([line.swipe_id, line.mes], [0, 'Old.']);
+        await t.fake.swipeGenerate(1);
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(1, 'New.');
+        assert.deepEqual(note(line), noted('bob.png'));
+        await finished(t.fake, 'swipe');
+        assert.deepEqual(entryNote(line, 1), noted('bob.png'));
+    });
+
+    test('records a new version in the slot of a version removed without an event', async () => {
+        const t = await setup();
+        await openScene(t, [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            withVersions(t.fake.message({ avatar: 'alice.png', mes: 'Old.', send_date: iso(START - 1000) }), 'Old too.'),
+        ]);
+        const line = t.fake.context.chat[1];
+        line.swipes.splice(1, 1);
+        line.swipe_info.splice(1, 1);
+        await t.fake.swipeGenerate(1);
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(1, 'New.');
+        assert.deepEqual(note(line), noted('bob.png'));
+    });
+
+    test('keeps read versions in step when a version is deleted', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const id = await t.fake.receive('carol.png', 'Hi.', 'normal', { alternatives: ['Hey.', 'Yo.'] });
+        const line = t.fake.context.chat[id];
+        await t.fake.swipeTo(id, 2);
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        assert.equal(t.scene.setState('alice.png', 'absent').ok, true);
+
+        // 'Hey.' (never shown) and 'Yo.' (read) each move down one place.
+        await t.fake.deleteSwipe(id, 0);
+        assert.deepEqual([line.swipe_id, line.mes], [1, 'Yo.']);
+        await t.fake.swipeTo(id, 0);
+        assert.equal(line.mes, 'Hey.');
+        assert.deepEqual(note(line), noted('alice.png'));
+        await t.fake.swipeTo(id, 1);
+        assert.deepEqual(note(line), noted('bob.png'));
+    });
+
+    test('mirrors a streamed reply into its swipe entry', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const id = await t.fake.receive('alice.png', 'Streamed.');
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.deepEqual(entryNote(line, 0), noted('bob.png'));
+        assert.notEqual(entryNote(line, 0), note(line));
+
+        await t.fake.swipeGenerate(id);
+        await t.fake.finishSwipe(id, 'Streamed again.');
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.deepEqual(entryNote(line, 1), noted('bob.png'));
+    });
+
+    test('records an unread version shown by a swipe as a new reply', async () => {
+        const t = await setup();
+        await openScene(t, [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            withVersions(t.fake.message({ avatar: 'alice.png', mes: 'Loaded.', send_date: iso(START - 1000) }), 'Loaded too.'),
+        ]);
+        // Versions in the file when the chat opened count as read.
+        await t.fake.swipeTo(1, 1);
+        assert.equal(note(t.fake.context.chat[1]), undefined);
+
+        const id = await t.fake.receive('carol.png', 'Hi.', 'normal', { alternatives: ['Hey.'] });
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.equal(entryNote(line, 1), undefined);
+        assert.equal(t.scene.setState('alice.png', 'absent').ok, true);
+        await t.fake.swipeTo(id, 1);
+        assert.deepEqual(note(line), noted('alice.png', 'bob.png'));
+        assert.deepEqual(entryNote(line, 1), noted('alice.png', 'bob.png'));
+        await t.fake.swipeTo(id, 0);
+        assert.deepEqual(note(line), noted('bob.png'));
+        assert.deepEqual(t.fake.saves, []);
+
+        // On an older line an unread version stays unrecorded.
+        const older = await t.fake.receive('carol.png', 'Again.', 'normal', { alternatives: ['Once more.'] });
+        await t.fake.receive('alice.png', 'Newest.');
+        await t.fake.swipeTo(older, 1);
+        assert.equal(note(t.fake.context.chat[older]), undefined);
+    });
+
+    test('reads a stopped stream at round end', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const before = await t.fake.receive('carol.png', 'Pushed before the round.', 'normal', { emitEvent: false });
+        t.fake.setGenerating(true);
+        await started(t.fake);
+        const stopped = await t.fake.receive('alice.png', 'Stopp', 'normal', { emitEvent: false });
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.deepEqual(note(t.fake.context.chat[stopped]), noted('bob.png'));
+        assert.deepEqual(entryNote(t.fake.context.chat[stopped], 0), noted('bob.png'));
+        assert.equal(note(t.fake.context.chat[before]), undefined);
+        assert.deepEqual(t.fake.saves.map(save => save.options), [{}]);
+
+        // The host skips GROUP_WRAPPER_STARTED when nobody is activated; such a round reads nothing.
+        const unstarted = await t.fake.receive('alice.png', 'No round.', 'normal', { emitEvent: false });
+        await finished(t.fake);
+        assert.equal(note(t.fake.context.chat[unstarted]), undefined);
+        assert.equal(t.fake.saves.length, 1);
+    });
+
+    test('a continue can only shrink away, also when its stream stopped', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })],
+            { absent: ['bob.png', 'carol.png'] });
+        const id = await t.fake.receive('alice.png', 'Once');
+        const line = t.fake.context.chat[id];
+        assert.deepEqual(note(line), noted('bob.png', 'carol.png'));
+
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        await t.fake.continueLine(id, ' upon a time.');
+        assert.deepEqual(note(line), noted('carol.png'));
+        assert.deepEqual(entryNote(line, 0), noted('carol.png'));
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.continueLine(id, ' More.', { streaming: false });
+        assert.deepEqual(note(line), noted('carol.png'));
+
+        assert.equal(t.scene.setState('carol.png', 'present').ok, true);
+        await started(t.fake, 'continue');
+        await t.fake.continueLine(id, ' Stopp', { emitEvent: false });
+        await finished(t.fake, 'continue');
+        assert.equal(note(line), undefined);
+        assert.equal(entryNote(line, 0), undefined);
+        assert.equal(t.fake.saves.length, 1);
+    });
+
+    test('strips copies from alternatives made this round', async () => {
+        const t = await setup();
+        const loaded = withVersions(t.fake.message({ avatar: 'alice.png', mes: 'Old.', send_date: iso(START - 1000),
+            extra: away('carol.png') }), 'Old too.');
+        loaded.swipe_info[1].extra = away('carol.png');
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }), loaded]);
+        const line = t.fake.context.chat[1];
+
+        await t.fake.swipeGenerate(1);
+        await started(t.fake, 'swipe');
+        await t.fake.finishSwipe(1, 'New.', { streaming: false, alternatives: ['Alt A.', 'Alt B.'] });
+        assert.deepEqual(entryNote(line, 3), noted('bob.png'));
+        await finished(t.fake, 'swipe');
+        assert.deepEqual(line.swipe_info.map(entry => entry.extra.sbu_scene),
+            [noted('carol.png'), noted('carol.png'), noted('bob.png'), undefined, undefined]);
+        assert.equal(t.fake.saves.length, 1);
+
+        await started(t.fake);
+        const id = await t.fake.receive('carol.png', 'Reply.', 'normal', { streaming: false, alternatives: ['Other.'] });
+        assert.deepEqual(entryNote(t.fake.context.chat[id], 1), noted('bob.png'));
+        await finished(t.fake);
+        assert.deepEqual(t.fake.context.chat[id].swipe_info.map(entry => entry.extra.sbu_scene), [noted('bob.png'), undefined]);
+        assert.equal(t.fake.saves.length, 2);
+    });
+
+    test('flushes unsaved changes after a quiet round', async () => {
+        for (const type of ['quiet', 'impersonate']) {
+            const t = await setup();
+            await openScene(t, lines3(t.fake), { absent: [] });
+            t.fake.setGenerating(true);
+            await started(t.fake, type);
+            await t.fake.addMember('dave.png');
+            assert.deepEqual(t.fake.saves, [], type);
+            t.fake.setGenerating(false);
+            await finished(t.fake, type);
+            assert.equal(t.fake.saves.length, 1, type);
+            assert.deepEqual(t.fake.saves[0].metadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]], type);
+            await finished(t.fake, type);
+            assert.equal(t.fake.saves.length, 1, type);
+        }
+    });
+
+    test('never saves when a chat opens', async () => {
+        const fake = await createFakeHost({ members: WITH_DAVE });
+        fake.context.chat = lines3(fake);
+        const t = attach(fake);
+        assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].known, WITH_DAVE);
+
+        // Dave is new to this file's roster, and one note cannot be read.
+        const lines = lines3(fake);
+        lines[0].extra = { sbu_scene: { v: 1, away: 'bob.png' } };
+        await fake.openChat(lines, header([]));
+        assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+        assert.equal(fake.toasts.length, 1);
+
+        fake.settings.update({ scene_history: false, scene_history_since: null });
+        fake.settings.update({ scene_history: true, scene_history_since: NEW_TOKEN });
+        assert.equal(fake.context.chatMetadata[ROSTER_KEY].since, NEW_TOKEN);
+        assert.equal(t.recorder.status().history, true);
+        assert.deepEqual(fake.saves, []);
+    });
+
+    test('passes allowShrink to a save right after a delete', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake));
+        t.fake.context.chat.pop();
+        await t.fake.emit('MESSAGE_DELETED', t.fake.context.chat.length);
+        await t.fake.sendUser('Right after.');
+        await t.fake.sendUser('Later.');
+        assert.deepEqual(t.fake.saves.map(save => save.options), [{ allowShrink: true }, {}]);
+    });
+
+    test('resets round state and seeds the read set on chat change', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        await t.fake.sendUser('Hi.');
+        await started(t.fake);
+        const loaded = () => [
+            t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 2000) }),
+            withVersions(t.fake.message({ avatar: 'alice.png', mes: 'Loaded.', send_date: iso(START - 1000) }), 'Loaded too.'),
+        ];
+        await t.fake.openChat(loaded());
+        const id = await t.fake.receive('carol.png', 'Unannounced.', 'normal', { emitEvent: false });
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(note(t.fake.context.chat[id]), undefined);
+        assert.deepEqual(t.fake.saves, []);
+
+        await t.fake.openChat(loaded());
+        await t.fake.swipeTo(1, 1);
+        assert.equal(note(t.fake.context.chat[1]), undefined);
+        // A round that starts in the new chat reads its own stopped stream.
+        await started(t.fake);
+        const stopped = await t.fake.receive('carol.png', 'Stopp', 'normal', { emitEvent: false });
+        await finished(t.fake);
+        assert.deepEqual(note(t.fake.context.chat[stopped]), noted('bob.png'));
+    });
+
+    test('warns once per chat about unreadable notes', async () => {
+        const t = await setup();
+        const odd = () => [t.fake.message({ avatar: 'alice.png', mes: 'Odd.', extra: { sbu_scene: { v: 1, away: 'bob.png' } } })];
+        const warning = { level: 'warning', text: SCENE_TEXT.P15 };
+        await t.fake.openChat(odd());
+        await t.fake.openChat(odd());
+        assert.deepEqual(t.fake.toasts, [warning]);
+        assert.deepEqual(note(t.fake.context.chat[0]), { v: 1, away: 'bob.png' });
+
+        switchChat(t.fake, 'c2');
+        await t.fake.openChat(odd());
+        assert.deepEqual(t.fake.toasts, [warning, warning]);
+
+        t.fake.settings.update({ scene_history: false });
+        switchChat(t.fake, 'c3');
+        await t.fake.openChat(odd());
+        assert.equal(t.fake.toasts.length, 2);
+        t.fake.settings.update({ scene_history: true });
+        assert.deepEqual(t.fake.toasts, [warning, warning, warning]);
+    });
+
+    test('saves after every creation-event write when the host cannot report generating', async () => {
+        const t = await setup();
+        t.fake.setGenerating(undefined);
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        await t.fake.sendUser('Hi.');
+        await t.fake.receive('alice.png', 'Hello.');
+        assert.equal(t.fake.saves.length, 2);
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        await t.fake.receive('carol.png', 'Nobody is away.');
+        assert.equal(t.fake.saves.length, 2);
+
+        t.fake.setGenerating(false);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.receive('alice.png', 'The host saves this one.');
+        assert.equal(t.fake.saves.length, 2);
+    });
+
+    test('reads only lines written while scene memory was on when it turns off mid-round', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        await started(t.fake);
+        t.fake.settings.update({ scene_history: false });
+        const off = await t.fake.receive('alice.png', 'While off.');
+        t.fake.settings.update({ scene_history: true });
+        const stopped = await t.fake.receive('carol.png', 'Stopp', 'normal', { emitEvent: false });
+        await finished(t.fake);
+        assert.equal(note(t.fake.context.chat[off]), undefined);
+        assert.deepEqual(note(t.fake.context.chat[stopped]), noted('bob.png'));
+
+        await started(t.fake);
+        const late = await t.fake.receive('alice.png', 'Stopp', 'normal', { emitEvent: false });
+        t.fake.settings.update({ scene_history: false });
+        await finished(t.fake);
+        assert.equal(note(t.fake.context.chat[late]), undefined);
+    });
+
+    test('tolerates messages without extra or swipe_info', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        const bare = { name: 'Alice', is_user: false, original_avatar: 'alice.png', mes: 'Bare.', send_date: iso(START) };
+        await push(t.fake, bare, 'MESSAGE_RECEIVED', 'normal');
+        assert.deepEqual(bare.extra, { sbu_scene: noted('bob.png') });
+
+        const odd = { is_user: true, mes: 42, extra: null, swipe_id: 9, swipe_info: [] };
+        await push(t.fake, odd, 'MESSAGE_SENT');
+        assert.deepEqual(odd.extra, { sbu_scene: noted('bob.png') });
+        assert.deepEqual(odd.swipe_info, []);
+        await t.fake.emit('MESSAGE_SWIPED', t.fake.context.chat.length - 1);
+
+        await t.fake.emit('MESSAGE_RECEIVED', 99, 'normal');
+        await t.fake.emit('MESSAGE_SENT', -1);
+        await t.fake.emit('MESSAGE_SWIPED', 'x');
+        await started(t.fake, 'swipe');
+        t.fake.context.chat.push(null, 42);
+        await t.fake.emit('MESSAGE_RECEIVED', t.fake.context.chat.length - 1, 'continue');
+        await finished(t.fake, 'swipe');
+        assert.deepEqual(t.logs, []);
+    });
+});
+
+describe('scene recorder join wiring', () => {
+    test('keeps a line written after an unannounced add visible to the newcomer', async () => {
+        const openedLater = async () => {
+            const t = await setup();
+            await t.fake.openChat(lines3(t.fake), header([]));
+            return t;
+        };
+        // GCO started with the chat already open: the init check reads the file instead.
+        const openBefore = async () => {
+            const fake = await createFakeHost();
+            fake.context.chat = lines3(fake);
+            fake.context.chatMetadata = header([]);
+            return attach(fake);
+        };
+        for (const open of [openedLater, openBefore]) {
+            const t = await open();
+            await t.fake.addMember('dave.png', { event: false });
+            t.fake.clock.tick();
+            t.fake.context.chat.push(t.fake.message({ avatar: 'alice.png', mes: 'After the add.' }));
+            const items = promptOf(t.fake.context.chat);
+            assert.equal(t.recorder.filter(items, 'normal', 'dave.png'), 3, open.name);
+            assert.deepEqual(items.map(item => item.mes), ['', '', '', 'After the add.'], open.name);
+        }
+    });
+
+    test('clears the filter error when the chat changes', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        let notified = 0;
+        recorder.subscribe(() => notified++);
+        recorder.filter([...promptOf(fake.context.chat), unreadable(new Error('unreadable extra'))], 'normal', 'bob.png');
+        assert.match(recorder.status().lastError, /unreadable extra/);
+        assert.equal(notified, 1);
+
+        await openMissed(fake);
+        assert.equal(recorder.status().lastError, null);
+        assert.equal(notified, 2);
+        await openMissed(fake);
+        assert.equal(notified, 2);
+    });
+
+    test('saves a join found at a send before returning, during a round too', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake));
+        await t.fake.addMember('dave.png', { event: false });
+        t.fake.setGenerating(true);
+        const done = slowSaves(t.fake);
+        // The note alone would wait for the host's reply save; the join makes the one save happen now.
+        const id = await t.fake.sendUser('Hi all.');
+        assert.equal(done.length, 1);
+        assert.deepEqual(done[0].metadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+        assert.deepEqual(note(done[0].chat[id]), noted('bob.png'));
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(done.length, 1);
+    });
+
+    test('clamps a join when a newer line is dated earlier', async () => {
+        const t = await setup({ members: WITH_DAVE });
+        await t.fake.openChat(lines3(t.fake), header([['dave.png', iso(START + 60_000)]]));
+        const sent = await t.fake.sendUser('Hi.');
+        const sentAt = Date.parse(t.fake.context.chat[sent].send_date);
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(sentAt - 1)]]);
+        assert.equal(t.fake.saves.length, 1);
+
+        t.fake.context.chatMetadata[ROSTER_KEY] = header([['dave.png', iso(START + 60_000)]])[ROSTER_KEY];
+        const quiet = await t.fake.receive('alice.png', 'Aside.', 'quiet');
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START + 60_000)]]);
+        const reply = await t.fake.receive('alice.png', 'Hello.');
+        const replyAt = Date.parse(t.fake.context.chat[reply].send_date);
+        assert.ok(replyAt > Date.parse(t.fake.context.chat[quiet].send_date));
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(replyAt - 1)]]);
+    });
+
+    test('checks joins when a generation starts and saves them at round end', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [] });
+        await t.fake.addMember('dave.png', { event: false });
+        t.fake.setGenerating(true);
+        await t.fake.emit('GENERATION_STARTED', 'normal', {}, false);
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+        assert.deepEqual(t.fake.saves, []);
+        t.fake.setGenerating(false);
+        await finished(t.fake);
+        assert.equal(t.fake.saves.length, 1);
+    });
+
+    test('saves a join from the editor at once when the host is idle', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [] });
+        await t.fake.addMember('dave.png');
+        assert.equal(t.fake.saves.length, 1);
+        assert.deepEqual(t.fake.saves[0].metadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+    });
+
+    test('adopts the header at the first message event', async () => {
+        const fake = await createFakeHost();
+        fake.context.chat = lines3(fake);
+        fake.context.chatMetadata = header([]);
+        const t = attach(fake);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await fake.addMember('dave.png');
+        assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+        assert.deepEqual(fake.saves, []);
+
+        await fake.sendUser('Hi.');
+        assert.equal(fake.saves.length, 1);
+        assert.deepEqual(fake.saves[0].metadata[ROSTER_KEY].joined, [['dave.png', iso(START - 1000)]]);
+    });
+
+    test('runs the join check when scene memory turns on, without saving', async () => {
+        const t = await setup({ settings: { scene_history: false, scene_history_since: null } });
+        await t.fake.openChat(lines3(t.fake));
+        assert.equal(Object.hasOwn(t.fake.context.chatMetadata, ROSTER_KEY), false);
+        t.fake.settings.update({ scene_history: true, scene_history_since: TOKEN });
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].known, FOUNDERS);
+        assert.equal(t.fake.context.chatMetadata[ROSTER_KEY].since, TOKEN);
+        t.fake.settings.update({ scene_history_since: NEW_TOKEN });
+        assert.equal(t.fake.context.chatMetadata[ROSTER_KEY].since, NEW_TOKEN);
+        assert.deepEqual(t.fake.saves, []);
+    });
+
+    test('warns once per chat about unreadable and foreign rosters', async () => {
+        const t = await setup();
+        const broken = () => ({ integrity: 'fake-integrity', [ROSTER_KEY]: { v: 1, group: '' } });
+        await t.fake.openChat(lines3(t.fake), broken());
+        await t.fake.openChat(lines3(t.fake), broken());
+        assert.deepEqual(t.fake.toasts, [{ level: 'warning', text: SCENE_TEXT.P27 }]);
+
+        switchChat(t.fake, 'c2');
+        await t.fake.openChat(lines3(t.fake), { integrity: 'fake-integrity', [ROSTER_KEY]: { v: 2 } });
+        await t.fake.openChat(lines3(t.fake), { integrity: 'fake-integrity', [ROSTER_KEY]: { v: 2 } });
+        assert.deepEqual(t.fake.toasts, [{ level: 'warning', text: SCENE_TEXT.P27 }, { level: 'warning', text: SCENE_TEXT.P28 }]);
+    });
+
+    test('renames the roster in a past chat and leaves the save to the host', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [] });
+        t.fake.context.groupId = null;
+        const roster = { v: 1, group: 'g1', since: TOKEN, floor: null, known: WITH_DAVE, gone: [],
+            joined: [['dave.png', iso(START - 5000)]] };
+        const messages = [{ chat_metadata: { integrity: 'other', [ROSTER_KEY]: roster } },
+            { name: 'Dave', mes: 'Hi.', original_avatar: 'dave.png' }];
+        await t.fake.emit('CHARACTER_RENAMED_IN_PAST_CHAT', messages, 'dave.png', 'david.png');
+        assert.deepEqual(messages[0].chat_metadata[ROSTER_KEY].known, [...FOUNDERS, 'david.png']);
+        assert.deepEqual(messages[0].chat_metadata[ROSTER_KEY].joined, [['david.png', iso(START - 5000)]]);
+        assert.deepEqual(t.fake.saves, []);
+    });
+
+    test('stops listening once destroyed', async () => {
+        const t = await setup();
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.recorder.destroy();
+        const id = await t.fake.sendUser('Hi.');
+        assert.equal(note(t.fake.context.chat[id]), undefined);
+        t.fake.settings.update({ scene_history: false, scene_history_since: null });
+        t.fake.settings.update({ scene_history: true, scene_history_since: NEW_TOKEN });
+        assert.equal(t.fake.context.chatMetadata[ROSTER_KEY].since, TOKEN);
+        assert.deepEqual(t.fake.saves, []);
     });
 });
 

@@ -1,8 +1,21 @@
 const DELETE_WINDOW_MS = 1500;
 
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/**
+ * A swipe that generates points past the stored versions until its reply is stored; if none is, endSwipe
+ * puts the old version back after the round, unsaved (script.js:16061-16101).
+ */
+export function isEmptySlot(message) {
+    if (!isRecord(message) || !Array.isArray(message.swipes)) return false;
+    const version = Number.isInteger(message.swipe_id) && message.swipe_id >= 0 ? message.swipe_id : 0;
+    return version >= message.swipes.length && !isRecord(message.swipe_info?.[version]);
+}
+
 /**
  * Every scene memory chat save goes through here. It saves only a header seen loaded for the open chat,
- * never an empty chat, and passes allowShrink only right after a delete in the same chat.
+ * never an empty chat or one whose newest line shows an empty swipe slot, and passes allowShrink only
+ * right after a delete in the same chat.
  */
 export function createChatSaver({ host, now = Date.now, log = console.warn }) {
     let loaded = new WeakMap();
@@ -25,7 +38,7 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
     async function save() {
         const key = currentKey();
         const chat = host.getContext().chat;
-        if (!isLoaded() || !Array.isArray(chat) || chat.length === 0) return false;
+        if (!isLoaded() || !Array.isArray(chat) || chat.length === 0 || isEmptySlot(chat[chat.length - 1])) return false;
         // deleteMessage queued a debounced allowShrink save; this save replaces it (§J.4).
         const shrink = deleted?.key === key && now() - deleted.time <= DELETE_WINDOW_MS;
         // Header fields replaced while the save is in flight are not on disk yet; listeners judge by this copy.
@@ -51,6 +64,7 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
         noteDelete() { deleted = { key: currentKey(), time: now() }; },
         save,
         markUnsaved() { unsaved = true; },
+        clearUnsaved() { unsaved = false; },
         hasUnsaved: () => unsaved,
         flush: () => unsaved ? save() : Promise.resolve(false),
         reset() { unsaved = false; deleted = undefined; },
