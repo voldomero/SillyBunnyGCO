@@ -133,6 +133,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     let destroyed = false;
     let lastError = null;
     let round = null;
+    // A stop seen outside a round: hosts without the wrapper events never open one (§13).
+    let stopped = false;
     // Changes waiting for the end of the round and of every hold: `queue` from lines, `planned` from the routed plan.
     let pending = null;
     let holds = 0;
@@ -651,6 +653,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         checkJoins('CHAT_CHANGED');
         const dropped = pending !== null;
         round = null;
+        stopped = false;
         pending = null;
         saver.reset();
         setLastError(null);
@@ -703,12 +706,17 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             } else wrote = recordNew(index, live, { detected: DETECTED.has(type) });
         }
         // A stream that errors is stopped first, then gets this event without the host's save (script.js:6763-6779).
-        const errored = HOST_SAVED.has(type) && round?.stopped === true;
-        if (errored) round.stopped = false;
-        let save = strongest(intent, wrote ? (errored ? 'idle' : receivedSave(type, index < chat.length - 1)) : null);
+        // Without a round nothing flushes later, so that reply is saved at once.
+        const errored = HOST_SAVED.has(type) && (round ? round.stopped === true : stopped);
+        if (errored) {
+            if (round) round.stopped = false;
+            else stopped = false;
+        }
+        const erroredSave = round ? 'idle' : 'await';
+        let save = strongest(intent, wrote ? (errored ? erroredSave : receivedSave(type, index < chat.length - 1)) : null);
         if (HOST_SAVED.has(type) && !errored) {
-            // The host's save right after this event carries every change made so far.
-            if (round && (wrote || saver.hasUnsaved())) round.trusted = true;
+            // The host's save right after this event carries every change made so far, a join write included.
+            if (round && (wrote || intent || saver.hasUnsaved())) round.trusted = true;
             saver.clearUnsaved();
             if (save !== 'await' && host.isGenerating() === true) save = null;
         }
@@ -1176,8 +1184,14 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     const handlers = {
         CHAT_CHANGED: chatChanged,
         GROUP_UPDATED: () => persist(checkJoins('GROUP_UPDATED')),
-        GENERATION_STARTED: (type, _options, dryRun) => persist(checkJoins('GENERATION_STARTED', { type, dryRun })),
-        GENERATION_STOPPED: () => { if (round) round.stopped = true; },
+        GENERATION_STARTED: (type, _options, dryRun) => {
+            if (!dryRun) stopped = false;
+            return persist(checkJoins('GENERATION_STARTED', { type, dryRun }));
+        },
+        GENERATION_STOPPED: () => {
+            if (round) round.stopped = true;
+            else stopped = true;
+        },
         GROUP_WRAPPER_STARTED: startRound,
         GROUP_WRAPPER_FINISHED: finishRound,
         MESSAGE_SENT: messageSent,

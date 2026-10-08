@@ -947,6 +947,51 @@ describe('scene recorder recording', () => {
         assert.equal(t.fake.saves.length, 2);
     });
 
+    test('saves a reply whose stream errored on a host without the wrapper events', async () => {
+        const t = await setup();
+        delete t.fake.context.eventTypes.GROUP_WRAPPER_STARTED;
+        delete t.fake.context.eventTypes.GROUP_WRAPPER_FINISHED;
+        await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
+        t.fake.setGenerating(true);
+        await t.fake.emit('GENERATION_STARTED', 'normal', {}, false);
+        await t.fake.emit('GENERATION_STOPPED');
+        // No round will flush this later, so the errored reply's note is saved at once.
+        const errored = await t.fake.receive('alice.png', 'Half a');
+        assert.deepEqual(note(t.fake.context.chat[errored]), noted('bob.png'));
+        assert.equal(t.fake.saves.length, 1);
+
+        // The host's own Stop, with no reply: the next generation forgets it and leaves its save to the host.
+        await t.fake.emit('GENERATION_STOPPED');
+        await t.fake.emit('GENERATION_STARTED', 'normal', {}, false);
+        await t.fake.receive('carol.png', 'Whole.');
+        assert.equal(t.fake.saves.length, 1);
+        assert.deepEqual(note(t.fake.context.chat.at(-1)), noted('bob.png'));
+        t.fake.setGenerating(false);
+    });
+
+    test('saves a round whose only write was a join when its stop comes late', async () => {
+        const { fake, recorder } = await setup();
+        await fake.openChat([
+            fake.message({ avatar: 'alice.png', mes: 'Hello.', send_date: iso(START - 3000) }),
+            fake.message({ is_user: true, mes: 'Hi.', send_date: iso(START - 2000) }),
+        ], header([]));
+        await fake.addMember('dave.png', { event: false });
+        fake.setGenerating(true);
+        await started(fake);
+        // The reply's join check writes Dave's join to the header; nobody is away, so no note is written.
+        const reply = await fake.receive('alice.png', 'Hi Dave.');
+        assert.equal(note(fake.context.chat[reply]), undefined);
+        assert.deepEqual(fake.context.chatMetadata[ROSTER_KEY].joined.map(([avatar]) => avatar), ['dave.png']);
+        assert.equal(fake.saves.length, 0);
+        // The errored stream's stop reaches GCO after the reply: the host saved nothing, so the round does.
+        await fake.emit('GENERATION_STOPPED');
+        fake.setGenerating(false);
+        await finished(fake);
+        assert.equal(fake.saves.length, 1);
+        assert.deepEqual(fake.saves[0].metadata[ROSTER_KEY].joined.map(([avatar]) => avatar), ['dave.png']);
+        assert.equal(recorder.filter(promptOf(fake.context.chat), 'normal', 'dave.png'), 2);
+    });
+
     test('a continue can only shrink away, also when its stream stopped', async () => {
         const t = await setup();
         await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })],
