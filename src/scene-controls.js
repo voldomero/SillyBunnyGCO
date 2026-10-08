@@ -5,7 +5,7 @@ const sibling = path => {
     if (token) url.searchParams.set('v', token);
     return url.href;
 };
-const { SCENE_TEXT } = await import(sibling('./scene-text.js'));
+const { SCENE_TEXT, textParts } = await import(sibling('./scene-text.js'));
 
 const STATUS_WORDS = { present: SCENE_TEXT.P6present, absent: SCENE_TEXT.P6absent, remote: SCENE_TEXT.P6remote,
     unspecified: SCENE_TEXT.P6unspecified };
@@ -91,10 +91,6 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
     const current = element('p', '', 'sbu-scene-current');
     const join = element('p', undefined, 'sbu-scene-join');
     join.id = 'sbu-scene-join';
-    const joinText = element('span', '', 'sbu-scene-join-text');
-    const joinLast = element('span', '', 'sbu-scene-join-last');
-    const joinCount = element('span', '', 'sbu-scene-join-count');
-    join.append(joinText, joinLast, joinCount);
     const omniscient = toggleRow('sbu-scene-omniscient', SCENE_TEXT.P3);
     const actions = element('div', undefined, 'sbu-scene-actions');
     const result = element('p', '', 'sbu-members-status'); result.setAttribute('role', 'status');
@@ -117,7 +113,7 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
         button.type = 'button'; button.id = `sbu-scene-${id}`;
         listen(button, 'click', () => {
             const outcome = scene.setState(avatar, target, key);
-            result.textContent = outcome.ok ? `${label}: current scene updated. Earlier events are unchanged.` : outcome.reason;
+            result.textContent = outcome.ok ? `${label}: current scene updated. Who saw earlier messages is unchanged.` : outcome.reason;
             refresh();
         });
         buttons.set(id, button); actions.append(button);
@@ -143,7 +139,8 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
     listen(reveal, 'click', () => {
         const target = avatar;
         let outcome = { ok: false };
-        try { outcome = sceneMemory.forgetJoin(target); } catch (error) {
+        // The panel shows the result itself, so the recorder skips its own notice for this reveal.
+        try { outcome = sceneMemory.forgetJoin(target, undefined, { toast: false }); } catch (error) {
             console.warn('[Group Utilities] Join reveal failed', error);
         }
         refresh();
@@ -175,16 +172,11 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
         row.dataset.pending = String(change.pending);
         const summary = element('span', undefined, 'sbu-scene-change-summary');
         summary.id = `sbu-scene-change-${position}`;
-        const from = element('span', STATUS_WORDS[change.from] ?? '', 'sbu-scene-change-status');
+        const from = element('span', STATUS_WORDS[change.from] ?? change.from, 'sbu-scene-change-status');
         from.dataset.status = change.from;
-        from.hidden = !Object.hasOwn(STATUS_WORDS, change.from);
-        const arrow = element('span', '→', 'sbu-scene-change-arrow');
-        arrow.setAttribute('aria-hidden', 'true');
-        arrow.hidden = from.hidden;
-        const to = element('span', STATUS_WORDS[change.to] ?? '', 'sbu-scene-change-status');
+        const to = element('span', STATUS_WORDS[change.to] ?? change.to, 'sbu-scene-change-status');
         to.dataset.status = change.to;
-        summary.append(element('span', change.name, 'sbu-scene-change-name'), element('span', SCENE_TEXT.P6, 'sbu-scene-change-text'),
-            from, arrow, to);
+        summary.append(...textParts(SCENE_TEXT.P6, { name: element('span', change.name, 'sbu-scene-change-name'), from, to }));
         row.append(summary);
         if (change.pending) row.append(element('span', SCENE_TEXT.P7, 'sbu-scene-change-pending'));
         const undo = element('button', SCENE_TEXT.P8, 'sbu-members-button sbu-scene-change-undo');
@@ -224,11 +216,14 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
         join.dataset.count = String(joined.hidden);
         if (Number.isInteger(joined.lastPreJoin)) join.dataset.lastIndex = String(joined.lastPreJoin);
         else delete join.dataset.lastIndex;
-        joinText.textContent = off ? SCENE_TEXT.P22 : SCENE_TEXT.P21;
-        joinLast.textContent = Number.isInteger(joined.lastPreJoin) ? `#${joined.lastPreJoin}` : '';
-        joinLast.hidden = off || !joinLast.textContent;
-        joinCount.textContent = String(joined.hidden);
-        joinCount.hidden = off;
+        if (off) join.replaceChildren(SCENE_TEXT.P22);
+        else if (!Number.isInteger(joined.lastPreJoin)) join.replaceChildren(SCENE_TEXT.P21none);
+        else {
+            join.replaceChildren(...textParts(SCENE_TEXT.P21, {
+                last: element('span', `#${joined.lastPreJoin}`, 'sbu-scene-join-last'),
+                n: element('span', String(joined.hidden), 'sbu-scene-join-count'),
+            }));
+        }
     }
 
     function refreshMemory(snapshot, member) {

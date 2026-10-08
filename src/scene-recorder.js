@@ -470,7 +470,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             const timeOf = lineTimes(context);
             const names = new Map(scene.getSnapshot().participants.map(member => [member.avatar, member.name]));
             return avatars.map(avatar => {
-                const { joined } = countHidden(context.chat, { speaker: avatar, joinTime: joins.joinTime(avatar), timeOf });
+                const joined = skipReason(avatar) ? 0
+                    : countHidden(context.chat, { speaker: avatar, joinTime: joins.joinTime(avatar), timeOf }).joined;
                 return `${names.get(avatar) ?? avatar} (${joined})`;
             }).join(', ');
         } catch (error) {
@@ -1093,8 +1094,11 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         }]);
     }
 
-    /** Join Undo (§J.8): the named newcomers see every earlier line of that chat, saved as a live join is (§J.4). */
-    function forgetJoins(avatars, chatKey) {
+    /**
+     * Join Undo (§J.8): the named newcomers see every earlier line of that chat, saved as a live join is (§J.4).
+     * `toast: false` is for callers that show the result themselves.
+     */
+    function forgetJoins(avatars, chatKey, { toast = true } = {}) {
         if (destroyed) return { ok: false, applied: false };
         let ok = false;
         let applied = false;
@@ -1104,7 +1108,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             applied = result.applied || applied;
         }
         if (applied) persist('idle').catch(error => logOnce(SAVE_FAILED, error));
-        host.toast(ok ? { level: 'info', text: SCENE_TEXT.P24 } : { level: 'warning', text: SCENE_TEXT.P20 });
+        if (toast) host.toast(ok ? { level: 'info', text: SCENE_TEXT.P24 } : { level: 'warning', text: SCENE_TEXT.P20 });
         notify();
         return { ok, applied };
     }
@@ -1239,7 +1243,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         getChanges,
         undo,
         joinStatus,
-        forgetJoin: (avatar, chatKey = host.activeConversation()?.key) => forgetJoins([avatar], chatKey),
+        forgetJoin: (avatar, chatKey = host.activeConversation()?.key, options) => forgetJoins([avatar], chatKey, options),
         subscribe(listener) {
             if (destroyed) return () => {};
             listeners.add(listener);

@@ -231,7 +231,7 @@ export function createTurnController({ host, settings, decide, scene, suggestion
         const key = proposalBatch.key;
         proposalBatch = undefined;
         const result = scene.setState(proposal.avatar, proposal.to, key);
-        status = result.ok ? 'Suggested current-scene change applied. Earlier events are unchanged.' : result.reason;
+        status = result.ok ? 'Suggested current-scene change applied. Who saw earlier messages is unchanged.' : result.reason;
         notify();
         return result;
     }

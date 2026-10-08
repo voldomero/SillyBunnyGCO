@@ -119,12 +119,11 @@ async function openMissed(fake) {
 }
 
 describe('scene text', () => {
-    test('defines every placeholder once, frozen', () => {
+    test('defines every string once, frozen', () => {
         const keys = ['P1', 'P1h', 'P2', 'P2h', ...Array.from({ length: 26 }, (_, index) => `P${index + 3}`),
-            'P4off', 'P6present', 'P6absent', 'P6remote', 'P6unspecified', 'P10line', 'R1'];
+            'P4off', 'P6present', 'P6absent', 'P6remote', 'P6unspecified', 'P10line', 'P21none', 'R1'];
         assert.ok(Object.isFrozen(SCENE_TEXT));
         assert.deepEqual(Object.keys(SCENE_TEXT).sort(), [...keys].sort());
-        for (const key of keys) assert.equal(SCENE_TEXT[key], 'lorum ipsum', key);
     });
 });
 
@@ -2256,6 +2255,26 @@ describe('scene recorder take-backs and Undo', () => {
             actionOf(t.fake.toasts[0])();
             assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
         });
+
+    test('the join toast counts nothing hidden for a newcomer who knows everything', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+        t.recorder.setOmniscient('dave.png', true);
+        await t.fake.addMember('dave.png');
+        assert.deepEqual(t.fake.shownToasts(), [withUndo({ level: 'info', text: SCENE_TEXT.P25, detail: 'Dave (0)' })]);
+    });
+
+    test('a reveal from the panel reports in the panel only', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [], metadata: header([]) });
+        await t.fake.addMember('dave.png');
+        const shown = t.fake.toasts.length;
+        assert.deepEqual(t.recorder.forgetJoin('dave.png', undefined, { toast: false }), { ok: true, applied: true });
+        assert.deepEqual(t.fake.context.chatMetadata[ROSTER_KEY].joined, []);
+        assert.equal(t.fake.toasts.length, shown);
+        assert.deepEqual(t.recorder.forgetJoin('dave.png', null, { toast: false }), { ok: false, applied: false });
+        assert.equal(t.fake.toasts.length, shown);
+    });
 
     test('forgets a join on request and saves it like a live join', async () => {
         const t = await setup();

@@ -5,7 +5,7 @@ const sibling = path => {
     if (token) url.searchParams.set('v', token);
     return url.href;
 };
-const { SCENE_TEXT } = await import(sibling('./scene-text.js'));
+const { SCENE_TEXT, textParts } = await import(sibling('./scene-text.js'));
 
 let instance;
 
@@ -129,12 +129,12 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
         return `${conversation?.key ?? ''}\n${selectedAvatar ?? ''}`;
     }
 
-    function hiddenCount(text, count, rule, name) {
+    function hiddenCount(template, count, rule, name) {
         const line = element('p', 'sbu-members-hint sbu-members-preview-count');
         line.dataset.rule = rule;
         line.dataset.count = String(count);
-        line.append(element('span', '', text), ' ', element('span', 'sbu-members-preview-number', String(count)));
-        if (name) line.append(' ', element('span', 'sbu-members-preview-name', name));
+        line.append(...textParts(template, { n: element('span', 'sbu-members-preview-number', String(count)),
+            name: element('span', 'sbu-members-preview-name', name ?? '') }));
         return line;
     }
 
@@ -147,8 +147,9 @@ export function createMembersPanel({ host, settings, buildPreview, writeAs, askT
             return;
         }
         previewMemory.dataset.count = String(memory.away);
-        previewMemory.append(hiddenCount(SCENE_TEXT.P10, memory.away, 'away', speaker?.name));
-        if (memory.joined > 0) previewMemory.append(hiddenCount(SCENE_TEXT.P26, memory.joined, 'joined', speaker?.name));
+        const name = speaker?.name ?? speaker?.avatar;
+        previewMemory.append(hiddenCount(SCENE_TEXT.P10, memory.away, 'away', name));
+        if (memory.joined > 0) previewMemory.append(hiddenCount(SCENE_TEXT.P26, memory.joined, 'joined', name));
         if (!memory.lines?.length) return;
         const lines = element('ul', 'sbu-members-preview-lines');
         for (const { index, rule, excerpt } of memory.lines) {
