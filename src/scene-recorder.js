@@ -297,6 +297,11 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     /** Scene notifications: a status the recorder did not set marks that member as changed by hand (§7). */
     function track() {
         if (destroyed) return;
+        // The scene panel notifies on every keystroke; with scene memory off nothing reads these marks.
+        if (!memoryOn(settings.get())) {
+            tracked = undefined;
+            return;
+        }
         try {
             const snapshot = scene.getSnapshot();
             const status = statusesOf(snapshot);
@@ -624,7 +629,8 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         indexed = null;
         track();
         const live = liveScene();
-        readAll(live);
+        // Turning scene memory on reads the history then, so a chat opened while it is off skips the scan.
+        if (memoryOn(settings.get())) readAll(live);
         seed(live);
         if (dropped) notify();
     }
@@ -1179,6 +1185,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             if (!active || (wasActive && !renewed)) return;
             checkJoins('turn-on');
             if (wasActive) return;
+            track();
             readAll(liveScene());
             reindex();
         } catch (error) {
@@ -1207,7 +1214,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     try {
         checkJoins('init');
         track();
-        readAll(liveScene());
+        if (memoryOn(settings.get())) readAll(liveScene());
         reindex();
     } catch (error) {
         logOnce(EVENT_FAILED, error);

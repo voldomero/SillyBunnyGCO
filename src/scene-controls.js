@@ -78,8 +78,7 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
     const status = element('p', undefined, 'sbu-scene-memory-status');
     status.id = 'sbu-scene-memory-status'; status.setAttribute('role', 'status');
     const statusText = element('span', '', 'sbu-scene-memory-status-text');
-    const statusError = element('span', '', 'sbu-scene-memory-error');
-    status.append(statusText, statusError);
+    status.append(statusText);
     memorySection.append(memory.label, memory.hint, automatic.label, automatic.hint, status);
     const changes = element('div', undefined, 'sbu-scene-changes');
     changes.id = 'sbu-scene-changes';
@@ -250,9 +249,9 @@ export function createSceneControls({ scene, sceneMemory, settings, getSelectedA
         // A live region can announce a rewrite even when the text is the same, so only real changes are written.
         if (status.dataset.state !== name) status.dataset.state = name;
         if (statusText.textContent !== text) statusText.textContent = text;
+        // The raw error is diagnostic, not copy, so it stays out of the visible text.
         const error = name === 'error' ? String(state.lastError) : '';
-        if (statusError.textContent !== error) statusError.textContent = error;
-        if (statusError.hidden !== (name !== 'error')) statusError.hidden = name !== 'error';
+        if (status.title !== error) status.title = error;
         omniscient.input.checked = Boolean(member) && sceneMemory.isOmniscient(avatar);
         omniscient.input.disabled = !member || !state.history;
         changes.hidden = !state.history;

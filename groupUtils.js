@@ -107,7 +107,9 @@ export async function rearrangeChat(_chat, _contextSize, _abort, generationType 
         if (disabled || !host.activeConversation(context)) return;
         // Blanks lines the speaker did not witness; it runs before the staleness returns below so they never skip it.
         try {
-            sceneMemory?.filter(_chat, generationType, generatingCharacter(context, resolveMembers(context))?.avatar);
+            if (sceneMemory && store.memoryOn(options(context))) {
+                sceneMemory.filter(_chat, generationType, generatingCharacter(context, resolveMembers(context))?.avatar);
+            }
         } catch (error) {
             console.warn('[Group Utilities] Scene memory filter failed', error);
         }

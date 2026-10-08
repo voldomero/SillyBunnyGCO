@@ -273,7 +273,6 @@
 .sbu-scene-controls .sbu-scene-memory p, .sbu-scene-controls .sbu-scene-changes p, .sbu-scene-controls .sbu-scene-join { margin: 0; }
 .sbu-scene-memory-status { display: flex; flex-wrap: wrap; gap: 4px 8px; overflow-wrap: anywhere; }
 .sbu-scene-memory-status:is([data-state='error'], [data-state='vocalia'], [data-state^='unavailable']) { font-weight: 600; }
-.sbu-scene-memory-error { flex: 1 1 100%; min-width: 0; font-size: 0.88em; font-weight: 400; }
 .sbu-scene-controls .sbu-scene-heading { margin: 0; font-size: 1em; font-weight: 600; }
 .sbu-scene-change-list { display: flex; flex-direction: column; gap: 6px; margin: 0; padding: 0; list-style: none; }
 .sbu-scene-change {

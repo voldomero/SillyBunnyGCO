@@ -1835,6 +1835,19 @@ describe('scene recorder take-backs and Undo', () => {
         assert.equal(statusOf(t, 'bob.png'), 'present');
     });
 
+    test('a manual change made right after turn-on still counts as manual', async () => {
+        const t = await auto();
+        t.fake.settings.update({ scene_history: false });
+        await openScene(t, hello(t.fake), { absent: [] });
+        t.fake.settings.update({ scene_history: true });
+        const chat = t.fake.context.chat;
+        const { left } = await departed(t);
+        assert.equal(t.scene.setState('bob.png', 'present').ok, true);
+        assert.equal(t.scene.setState('bob.png', 'absent').ok, true);
+        await t.fake.deleteLine(chat.indexOf(left));
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+    });
+
     test('a manual change still blocks withdrawal after another chat was opened', async () => {
         const t = await auto();
         await openScene(t, hello(t.fake), { absent: [] });
@@ -2242,6 +2255,25 @@ describe('scene recorder take-backs and Undo', () => {
 });
 
 describe('scene recorder cost', () => {
+    test('reads no history and no scene while scene memory is off', async () => {
+        const fake = await createFakeHost({ settings: { scene_history: false } });
+        const scene = createSceneStore(fake);
+        let snapshots = 0;
+        const counted = { ...scene, getSnapshot: () => { snapshots++; return scene.getSnapshot(); } };
+        let versionReads = 0;
+        const lines = lines3(fake).map(line => {
+            const versions = line.swipes;
+            Object.defineProperty(line, 'swipes', { get() { versionReads++; return versions; }, enumerable: true });
+            return line;
+        });
+        createSceneRecorder({ host: fake.host, settings: fake.settings, scene: counted, now: fake.clock.now, log: () => {} });
+        await fake.openChat(lines);
+        scene.update?.({});
+        await fake.emit('CHAT_CHANGED', fake.context.chatId);
+        assert.equal(versionReads, 0);
+        assert.equal(snapshots, 0);
+    });
+
     test('a joiner costs no more host context reads than a founder, however long the chat', async () => {
         const fake = await createFakeHost({ members: WITH_DAVE });
         // The real getContext() builds a new object of about 180 properties on every call.
