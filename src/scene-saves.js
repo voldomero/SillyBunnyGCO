@@ -28,6 +28,8 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
         if (!isLoaded() || !Array.isArray(chat) || chat.length === 0) return false;
         // deleteMessage queued a debounced allowShrink save; this save replaces it (§J.4).
         const shrink = deleted?.key === key && now() - deleted.time <= DELETE_WINDOW_MS;
+        // Header fields replaced while the save is in flight are not on disk yet; listeners judge by this copy.
+        const carried = { ...host.chatMetadata() };
         let ok = false;
         try { ok = await host.saveChat(shrink ? { allowShrink: true } : {}) === true; }
         catch (error) { ok = false; log('[Group Utilities] Scene memory save failed', error); }
@@ -37,7 +39,7 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
             log('[Group Utilities] The chat was not saved; scene memory keeps its changes for the next save.');
         }
         for (const listener of [...listeners]) {
-            try { listener(ok, key); } catch (error) { log('[Group Utilities] Scene memory save listener failed', error); }
+            try { listener(ok, key, carried); } catch (error) { log('[Group Utilities] Scene memory save listener failed', error); }
         }
         return ok;
     }

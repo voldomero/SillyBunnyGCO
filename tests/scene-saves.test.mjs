@@ -109,6 +109,22 @@ describe('chat save gate', () => {
         assert.deepEqual(seen, [[true, key]]);
     });
 
+    test('tells listeners the header fields as they were when the save started', async () => {
+        const { fake, saver } = await setup();
+        const carried = [];
+        saver.onSaved((ok, savedKey, header) => carried.push(header));
+        fake.context.chatMetadata.note = 'sent';
+        saver.adopt();
+        let finish;
+        fake.context.saveChat = () => new Promise(resolve => { finish = resolve; });
+        const saving = saver.save();
+        fake.context.chatMetadata.note = 'later';
+        finish(true);
+        await saving;
+        assert.equal(carried[0].note, 'sent');
+        assert.notEqual(carried[0], fake.context.chatMetadata);
+    });
+
     test('reset clears the unsaved flag and the delete window', async () => {
         const { fake, saver } = await setup();
         saver.adopt();
