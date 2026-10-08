@@ -206,13 +206,16 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
     /**
      * The host's hide request (GENERATION_HIDE_MESSAGES), asked before it merges retained companion notes: the
      * lines filter() will blank for this speaker are declared by index, so their notes stay out of the merge
-     * and none of them hosts it. The request's copies are planned over, never changed; true when lines were hidden.
+     * and none of them hosts it. The request still holds the host-hidden lines whose notes that merge draws
+     * from, so those are declared too when the speaker missed them. The request's copies are planned over,
+     * never changed; the cheap gates run before the host builds them. Returns how many lines were hidden
+     * (0 when the request is skipped or planning fails).
      */
     function declare(request, speaker) {
         try {
-            const items = request?.messages;
+            if (!request || !HIDE_TYPES.has(request.type) || skipReason(speaker)) return 0;
+            const items = request.messages;
             if (!Array.isArray(items) || typeof request.hide !== 'function') return 0;
-            if (!HIDE_TYPES.has(request.type) || skipReason(speaker)) return 0;
             const plan = planHidden(items, { speaker, type: request.type, joinTime: joins.joinTime(speaker),
                 timeOf: lineTimes(host.getContext()) });
             let hidden = 0;

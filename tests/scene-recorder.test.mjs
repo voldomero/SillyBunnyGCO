@@ -451,6 +451,24 @@ describe('scene recorder hide request', () => {
         }
     });
 
+    test('declares a host-hidden line the speaker missed, which the interceptor never sees', async () => {
+        const { fake, recorder } = await setup();
+        await openMissed(fake);
+        const live = fake.context.chat;
+        // The host keeps a hidden line in the request when the merge would draw retained notes from it.
+        live.push(fake.message({ avatar: 'carol.png', mes: 'Hidden aside.', is_system: true, extra: away('bob.png') }));
+        const ignore = fake.context.symbols.ignore;
+
+        const request = hideRequest(promptOf(live), 'normal');
+        assert.equal(recorder.declare(request, 'bob.png'), 2);
+        assert.deepEqual([...request.hidden].sort((a, b) => a - b), [1, 2]);
+
+        const interceptorView = promptOf(live.filter(message => !message.is_system));
+        assert.equal(recorder.filter(interceptorView, 'normal', 'bob.png'), 1);
+        assert.deepEqual(interceptorView.map(item => item.extra?.[ignore] === true), [false, true]);
+        assert.equal(recorder.hiddenFor('bob.png').away, 1);
+    });
+
     test('declares nothing for prompts, speakers and requests filter would not touch', async () => {
         const { fake, recorder } = await setup();
         await openMissed(fake);
