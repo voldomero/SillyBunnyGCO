@@ -125,6 +125,22 @@ describe('chat save gate', () => {
         assert.notEqual(carried[0], fake.context.chatMetadata);
     });
 
+    test('keeps a change marked while a save is in flight for the next flush', async () => {
+        const { fake, saver } = await setup();
+        saver.adopt();
+        let finish;
+        fake.context.saveChat = () => new Promise(resolve => { finish = resolve; });
+        saver.markUnsaved();
+        const saving = saver.save();
+        saver.markUnsaved();
+        finish(true);
+        assert.equal(await saving, true);
+        assert.equal(saver.hasUnsaved(), true);
+        fake.context.saveChat = async () => true;
+        assert.equal(await saver.flush(), true);
+        assert.equal(saver.hasUnsaved(), false);
+    });
+
     test('clearUnsaved keeps the delete window open', async () => {
         const { fake, saver } = await setup();
         saver.adopt();

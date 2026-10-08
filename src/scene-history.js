@@ -93,6 +93,21 @@ export function stripRecord(entry) {
     entry.extra = copy;
 }
 
+/** A past-chat rename: every valid note on a line or on its stored versions names `to` where it named `from`. */
+export function renameInNotes(messages, from, to) {
+    if (!Array.isArray(messages) || !isAvatar(from) || !isAvatar(to) || from === to) return;
+    const swap = avatar => avatar === from ? to : avatar;
+    for (const message of messages) {
+        if (!isRecord(message) || own(message, 'chat_metadata')) continue;
+        for (const target of [message, ...arrayOf(message.swipe_info)]) {
+            const { record } = isRecord(target) ? readRecord(target.extra) : { record: null };
+            if (!record || ![...record.away, ...record.undone, ...record.moved.map(([avatar]) => avatar)].includes(from)) continue;
+            target.extra[RECORD_KEY] = storedForm({ away: record.away.map(swap), undone: record.undone.map(swap),
+                moved: record.moved.map(([avatar, before, after]) => [swap(avatar), before, after]) });
+        }
+    }
+}
+
 export function authorOf(message) {
     if (!isRecord(message) || message.is_user || (isRecord(message.extra) && message.extra.type === 'narrator')) return undefined;
     return typeof message.original_avatar === 'string' && message.original_avatar ? message.original_avatar : undefined;

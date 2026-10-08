@@ -23,6 +23,8 @@ const isPlaceholder = message => isRecord(message) && !message.is_user && messag
 export function createChatSaver({ host, now = Date.now, log = console.warn }) {
     let loaded = new WeakMap();
     let unsaved = false;
+    // Bumped by every markUnsaved, so a save clears only the changes it could have carried.
+    let revision = 0;
     let deleted;
     let warned = false;
     const listeners = new Set();
@@ -47,11 +49,13 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
         const shrink = deleted?.key === key && now() - deleted.time <= DELETE_WINDOW_MS;
         // Header fields replaced while the save is in flight are not on disk yet; listeners judge by this copy.
         const carried = { ...host.chatMetadata() };
+        const started = revision;
         let ok = false;
         try { ok = await host.saveChat(shrink ? { allowShrink: true } : {}) === true; }
         catch (error) { ok = false; log('[Group Utilities] Scene memory save failed', error); }
-        if (ok) unsaved = false;
-        else if (!warned) {
+        if (ok) {
+            if (revision === started) unsaved = false;
+        } else if (!warned) {
             warned = true;
             log('[Group Utilities] The chat was not saved; scene memory keeps its changes for the next save.');
         }
@@ -67,7 +71,10 @@ export function createChatSaver({ host, now = Date.now, log = console.warn }) {
         isLoaded,
         noteDelete() { deleted = { key: currentKey(), time: now() }; },
         save,
-        markUnsaved() { unsaved = true; },
+        markUnsaved() {
+            unsaved = true;
+            revision++;
+        },
         clearUnsaved() { unsaved = false; },
         hasUnsaved: () => unsaved,
         flush: () => unsaved ? save() : Promise.resolve(false),

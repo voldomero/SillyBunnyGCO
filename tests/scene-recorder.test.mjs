@@ -1148,6 +1148,30 @@ describe('scene recorder join wiring', () => {
         assert.deepEqual(t.fake.saves, []);
     });
 
+    test('renames the avatar in a past chat\'s notes while scene memory is on', async () => {
+        const t = await setup();
+        await openScene(t, lines3(t.fake), { absent: [] });
+        t.fake.context.groupId = null;
+        const line = { name: 'Alice', mes: 'Dave heads out.', original_avatar: 'alice.png', swipe_id: 0,
+            extra: { sbu_scene: { v: 1, away: ['bob.png', 'dave.png'], moved: [['dave.png', 'present', 'absent']],
+                undone: ['dave.png'] } },
+            swipe_info: [{ extra: { sbu_scene: { v: 1, away: ['dave.png'] } } },
+                { extra: { sbu_scene: { v: 1, away: ['dave.png', 'zed.png'] } } }] };
+        const unknown = { name: 'Bob', mes: 'Hm.', original_avatar: 'bob.png', extra: { sbu_scene: { v: 2, away: ['dave.png'] } } };
+        const messages = [{ chat_metadata: { integrity: 'other' } }, line, unknown];
+        await t.fake.emit('CHARACTER_RENAMED_IN_PAST_CHAT', messages, 'dave.png', 'david.png');
+        assert.deepEqual(line.extra.sbu_scene, { v: 1, away: ['bob.png', 'david.png'],
+            moved: [['david.png', 'present', 'absent']], undone: ['david.png'] });
+        assert.deepEqual(line.swipe_info[0].extra.sbu_scene, { v: 1, away: ['david.png'] });
+        assert.deepEqual(line.swipe_info[1].extra.sbu_scene, { v: 1, away: ['david.png', 'zed.png'] });
+        assert.deepEqual(unknown.extra.sbu_scene, { v: 2, away: ['dave.png'] });
+        assert.deepEqual(t.fake.saves, []);
+
+        t.fake.settings.update({ scene_history: false });
+        await t.fake.emit('CHARACTER_RENAMED_IN_PAST_CHAT', messages, 'david.png', 'dave.png');
+        assert.deepEqual(line.swipe_info[0].extra.sbu_scene, { v: 1, away: ['david.png'] });
+    });
+
     test('stops listening once destroyed', async () => {
         const t = await setup();
         await openScene(t, [t.fake.message({ is_user: true, mes: 'Hello?', send_date: iso(START - 1000) })]);
@@ -1813,6 +1837,20 @@ describe('scene recorder take-backs and Undo', () => {
         assert.equal(statusOf(t, 'bob.png'), 'unspecified');
         assert.equal(note(chat[id]), undefined);
         assert.equal(t.fake.toasts.length, 1);
+    });
+
+    test('an edit that takes out an arrival puts its member back on the away list', async () => {
+        const t = await auto();
+        await openScene(t, hello(t.fake));
+        const chat = t.fake.context.chat;
+        const id = await t.fake.receive('alice.png', 'Bob comes back.');
+        assert.equal(statusOf(t, 'bob.png'), 'present');
+        assert.deepEqual(note(chat[id]), { v: 1, moved: [['bob.png', 'absent', 'present']] });
+        await t.fake.editLine(id, 'Evening.');
+        assert.equal(statusOf(t, 'bob.png'), 'absent');
+        assert.deepEqual(note(chat[id]), noted('bob.png'));
+        assert.deepEqual(entryNote(chat[id], 0), noted('bob.png'));
+        assert.equal(t.recorder.filter(promptOf(chat), 'normal', 'bob.png'), 1);
     });
 
     test('a manual change blocks withdrawal', async () => {

@@ -8,8 +8,8 @@ const sibling = path => {
 const [
     { isOmniscient: omniscientIn, memoryActive, memoryOn, omniscientPatch },
     {
-        HIDE_TYPES, RECORD_KEY, authorOf, blankItems, computeAway, countHidden, planHidden, readRecord, resolveChange,
-        revealWalk, seedFrom, stripRecord, writeRecord,
+        HIDE_TYPES, RECORD_KEY, authorOf, blankItems, computeAway, countHidden, planHidden, readRecord, renameInNotes,
+        resolveChange, revealWalk, seedFrom, stripRecord, writeRecord,
     },
     { timeOf: readTime },
     { createChatSaver, isEmptySlot },
@@ -739,8 +739,13 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         const found = editable && !invalid ? detectLine(message, live) : [];
         const makes = (avatar, to) => found.some(change => change.avatar === avatar && change.to === to);
         const moved = base.moved.filter(([avatar, , to]) => makes(avatar, to));
+        // A member whose arrival the text no longer makes was away for this line after all.
+        const author = authorOf(message);
+        const returned = base.moved.filter(entry => !moved.includes(entry))
+            .filter(([avatar, from]) => from === 'absent' && avatar !== author).map(([avatar]) => avatar);
+        const away = [...base.away, ...returned];
         if (moved.length < base.moved.length) {
-            writeNote(message, { ...base, moved });
+            writeNote(message, { ...base, away, moved });
             notify();
         }
         withdraw();
@@ -757,7 +762,7 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
         }
         if (!added.length) return;
         const movers = new Set(added.map(([avatar]) => avatar));
-        writeNote(message, { ...base, away: base.away.filter(avatar => !movers.has(avatar)), moved: [...moved, ...added] });
+        writeNote(message, { ...base, away: away.filter(avatar => !movers.has(avatar)), moved: [...moved, ...added] });
         settle(message, added, current, latest);
     }
 
@@ -1143,7 +1148,10 @@ export function createSceneRecorder({ host, settings, scene, detect = detectPres
             if (withdraw()) persistLater();
         },
         // The host awaits this event, then saves that file itself (group-chats.js:1373-1380).
-        CHARACTER_RENAMED_IN_PAST_CHAT: (messages, from, to) => joins.rename(messages, from, to),
+        CHARACTER_RENAMED_IN_PAST_CHAT: (messages, from, to) => {
+            joins.rename(messages, from, to);
+            if (memoryActive(settings.get())) renameInNotes(messages, from, to);
+        },
     };
 
     async function onHostEvent(name, ...args) {
