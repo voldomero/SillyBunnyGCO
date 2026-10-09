@@ -217,4 +217,4 @@ Inspirations for GCO's scene, responder and context features:
 - [Natural-Extended](https://github.com/Spiriax/Natural-Extended)
 - [Aspect: Vocalia](https://github.com/Vectricity/st-aspect-vocalia)
 
-These inspiration projects are not bundled with GCO.
+These projects are **not** bundled with GCO.
