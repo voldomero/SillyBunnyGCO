@@ -1,202 +1,220 @@
 # SillyBunny Group Chat Overhaul
 
-**PRE-RELEASE v0.01**
+> A SillyBunny group chat overhaul. Combines the old "Group Utilities" with new implementation, ideas, and fixes.
 
-SillyBunny Group Chat Overhaul (GCO) provides coordinated group-member controls, shared context, current-scene settings and optional assistance. Existing Group Utils settings and storage keys are retained to preserve your data.
+## Table of Contents
 
-This project exists to make group chats in [SillyBunny](https://github.com/platberlitz/SillyBunny) smoother by combining group-specific greetings, shared group context utilities, and quick `/sendas` support without requiring users to install and manage several separate extensions.
+- [About](#about)
+- [Install](#install)
+- [Bundled Extensions](#bundled-extensions)
+  - [Group Greetings](#group-greetings)
+  - [Group Utilities](#group-utilities)
+  - [Group SendAs](#group-sendas)
+- [Changes](#changes)
+- [Features](#features)
+  - [Group Dynamics](#group-dynamics)
+  - [Card-specific notes](#card-specific-notes)
+  - [Context preview](#context-preview)
+  - [Write as and Ask to respond](#write-as-and-ask-to-respond)
+  - [Choose next responder](#choose-next-responder)
+  - [Current Members](#current-members)
+- [Optional Features](#optional-features)
+  - [Shared context](#shared-context)
+  - [Action-row shortcuts](#action-row-shortcuts)
+  - [Compact responder picker](#compact-responder-picker)
+  - [Reply Rules and focus](#reply-rules-and-focus)
+  - [Automatic routing](#automatic-routing)
+  - [Current scene](#current-scene)
+  - [Scene memory](#scene-memory)
+  - [Automatic presence](#automatic-presence)
+  - [Scene suggestions](#scene-suggestions)
+  - [Prose styling](#prose-styling)
+- [Troubleshooting](#troubleshooting)
+- [Credits, License & Inspirations](#credits-license--inspirations)
 
-## Available in this pre-release
+## About
 
-### Current scene and optional assistance
+SillyBunny Group Chat Overhaul (GCO) combines group greetings, shared character context and SendAs controls with a Group Dynamics panel for [SillyBunny](https://github.com/SillyBunnyTeam/SillyBunny/). It adds card-specific notes, responder selection, Reply Rules, scene states and optional memory filtering, automatic presence, model-assisted scene suggestions and prose styling.
 
-- **Group Dynamics → Current scene** now provides opt-in controls for present, absent and remotely connected members. Unspecified is the default. Choices belong to the exact card and conversation, and save through extension settings.
-- Scene restrictions apply to this extension's **Ask** actions, Reply Rules and focus. Membership and mute remain separate. When this extension does not own routing, the host can select replies independently.
-- Optional **Scene suggestions** use an explicitly selected saved connection profile. Chat-completion and text-completion providers supported by SillyBunny's background request service are available, including custom OpenAI-compatible endpoints and local models. Each manual request may cost money. Suggestions require review and one explicit Apply action; they do not select speakers or run automatically.
-- Optional prose styling uses the host's existing quote and emphasis markup. It leaves message text and code unchanged and requires no special model output.
-- Optional [**Scene memory**](#scene-memory) hides messages from members who were absent or joined later. Automatic turn suggestions are unavailable.
+GCO is designed for SillyBunny. Features that need additional host support show an explanation when unavailable. Most optional features start off; notes, description sharing and the Current Members shortcut start on.
 
-### Responder controls and Reply Rules
+## Install
 
-- Stabilized native reply guards for mismatched group IDs, pending file attachments and replies returning after a conversation changes.
-- Optional compact **Responder** controls share one request controller with Group Dynamics. **Write as** prepares a draft; **Ask now** requests one native reply with an empty composer. Clearing a request asks compatible hosts to cancel that request; native Stop remains available.
-- **Reply Rules** provides exact-card aliases, separate phrase entries, exclusions, all-eligible addressing, mention order, response limits, session focus and an explanatory preview. It matches literal phrases, not meaning.
-- **Choose next responder and automatic routing require compatible host support.** The controls stay disabled when that support is absent. Rule preview remains available and does not send replies or change native strategy.
+1. Open **Extensions** in SillyBunny and select the extension installer.
+2. Paste `https://github.com/voldomero/SillyBunnyGCO` and install.
+3. Enable **SillyBunny Group Chat Overhaul**, then reload or hard refresh SillyBunny.
+4. Open **Extensions → Group Chat Overhaul** to configure GCO or open **Group Dynamics**.
 
-### Group Dynamics
-
-- **Group Dynamics** opens from the Extensions menu or Group Utils settings. An optional action-row shortcut uses the same open/close action. The panel starts closed and follows the active conversation. A separate **Current Members** shortcut opens SillyBunny's native member list.
-- Select a member to edit their shared note, prepare a **Write as** draft, or **Ask to respond** through native group generation. Asking for a reply requires an empty composer so an existing draft is preserved.
-- Notes and character descriptions have independent sharing switches. **Context preview** shows the extension's additions for a normal reply by the selected member, including omissions and any uncertainty about native description sharing.
-- Existing notes and greetings are preserved. New note edits attach to the exact character card. Ambiguous older name-based notes remain available for explicit assignment to a card.
-- Desktop placement and resizing use native Moving UI when enabled; **Reset position** resets only this panel's saved geometry. Narrow screens use a scrolling panel within the viewport.
+Disable standalone Group Greetings, Group Utilities or Group SendAs extensions if installed; GCO already includes them. No build or dependency installation is needed.
 
 ## Bundled Extensions
 
-This extension is based on and credits the following upstream projects:
-
-- ~~[SillyTavern Presence](https://github.com/leandrojofre/SillyTavern-Presence) by [leandrojofre](https://github.com/leandrojofre).~~
-- [Extension-GroupGreetings](https://github.com/SillyTavern/Extension-GroupGreetings) by [Cohee](https://github.com/Cohee1207).
-- [st-group-utils](https://github.com/DummyTBanana/st-group-utils) by [city-unit](https://github.com/city-unit).
-- [SillyTavern GroupSendAs](https://github.com/SillyTavern/SillyTavern-GroupSendAs) by [Cohee](https://github.com/Cohee1207).
-
-## Features
-
-- Group-only greetings for character cards, with random or manual selection modes.
-- Group utility prompts that can share character information and group notes during generation.
-- A Group Dynamics panel for the active conversation, with shared notes and context preview.
-- **Write as** prepares a `/sendas` draft using the host's character reference; **Ask to respond** requests a native generated reply.
-- Optional current-scene controls, reviewed model-assisted scene suggestions, and styling for existing prose markup.
-- Compact SillyBunny-specific current-member layout so Model Override and action buttons fit together more cleanly.
-
-## Installation
-
-Install through SillyBunny's built-in extension installer:
-
-1. Open SillyBunny.
-2. Go to **Extensions**.
-3. Use the extension installer.
-4. Paste `https://github.com/voldomero/SillyBunnyGCO`.
-5. Disable any old Group Utilities copy, reload, then install and enable **SillyBunny Group Chat Overhaul**.
-6. Restart or hard refresh SillyBunny after installation.
-
-Keep only one active Group Utilities/GCO bundle and avoid duplicate standalone Greetings/Group Utilities/SendAs installations. Duplicate copies can register the same controls or generation interceptor more than once.
-
-## Notes For SillyBunny
-
-This is not a direct drop-in zip of the original extensions. It is a compatibility bundle with SillyBunny-specific changes:
-
-- The bundled utilities load from one manifest and one extension entry.
-- Member-row controls are coordinated so they do not fight SillyBunny's **Model Override** field.
-- The legacy [SillyTavern-Presence](https://github.com/leandrojofre/SillyTavern-Presence) module is not included. Current-scene controls use extension settings. Scene memory, when on, also stores small notes in the chat file.
-- Group utility notes are injected through SillyBunny's extension-prompt API instead of mutating the live generation chat array.
-- Group utility settings, group greetings, and SendAs behavior remain available from the bundled extension.
-
-## Usage
-
 ### Group Greetings
 
-Open a character card or character creation form, then use the group greetings button near the first-message controls. You can add group-only greetings and choose whether SillyBunny picks one randomly or asks you to choose when starting a group chat.
+[Extension-GroupGreetings](https://github.com/SillyTavern/Extension-GroupGreetings) adds alternate greetings used only in group chats. Open the group-greetings button beside a character's first-message controls to edit greetings and choose random or manual selection.
 
 ### Group Utilities
 
-Open **Group Dynamics** from the Extensions menu or Group Utils settings. The panel shows the active conversation even when a different group is open in the editor. Select a member to edit their note or open **Context preview**. Preview shows additional extension context, not the entire host prompt.
-
-**Current Members** is SillyBunny's native list, with automatic-reply toggles, Model Override and member-management buttons. **Group Dynamics** contains shared notes, scene controls and context preview. Each window has its own shortcut.
-
-The Current Members shortcut opens the active group's roster without switching chats. Finish or leave a new character or group form before using it.
-
-Configure **Share group notes** and **Share character descriptions and height context** independently in Group Utils settings. **Show Group Dynamics in the action row** adds the optional Dynamics shortcut. **Show Current Members in the action row** is enabled by default and can be switched off separately. Both shortcuts appear beside Guided Impersonate and Flush Guides when that row is available, using the same native icon-button sizing. Group Dynamics stays closed until opened.
-
-With native Moving UI enabled on desktop, use the grip to move the panel and its lower-right corner to resize it. **Reset position** restores its default placement. Native automatic-reply availability is shown as read-only information; it is not a record of who was historically present.
+[st-group-utils](https://github.com/DummyTBanana/st-group-utils) supplies shared notes, limited character descriptions, height comparisons and context settings. GCO expands these with exact-card notes, independent sharing switches and a context preview.
 
 ### Group SendAs
 
-Use **Write as** in Group Dynamics, or the quote button in the native members list, to prepare a character's `/sendas` draft. Repeated use replaces the existing prefix and keeps the draft text and selection. Sending remains a separate action in the host composer.
+[SillyTavern GroupSendAs](https://github.com/SillyTavern/SillyTavern-GroupSendAs) adds a quote button to the native members list to prepare a `/sendas` draft. GCO also exposes this as **Write as** in Group Dynamics and the compact responder picker.
 
-**Ask to respond** requests a generated reply from the selected member. Finish or clear your draft first; this action is unavailable while the composer contains text or a response is running.
+## Changes
 
-## Responder controls and Reply Rules
+**SillyBunny Group Utilities → SillyBunny Group Chat Overhaul**
 
-In **Group Utils**, enable **Show compact responder picker** to show controls near the composer. Choose a card by its name and filename; duplicate names remain separate. Muted cards stay visible. Asking a muted card explicitly requests a native manual reply; it does not enable automatic replies or change scene/knowledge state.
+- Added **Group Dynamics** with member notes, context preview, scene controls, save feedback and desktop move/resize support.
+- Added **compact responder controls**, **Reply Rules**, session focus, native next-speaker synchronization and automatic routing on compatible hosts.
+- Added **current-scene states**, **scene memory**, late-join history controls and **automatic presence** with Undo.
+- Added manual **scene suggestions** through saved chat/text connection profiles and optional **prose styling**.
+- Improved native member-row layout alongside Model Override, added separate action-row shortcuts and made panels usable on narrow screens.
+- Added pending-edit recovery, confirmed-save feedback and guards against applying replies or suggestions to a different conversation.
 
-Ask requires an empty text draft and no pending file attachment or outstanding reply. Write as is also guarded while an extension reply request is outstanding. **Clear request** discards pending work and asks compatible hosts to cancel the owned request. On older hosts, use **Stop** to stop generation. An unresolved request keeps its lock even after a timeout or clear, until its native call returns. A returned manual call is not proof that a reply was produced; it never triggers an automatic follow-up or retry.
+Bundled-extension updates:
 
-Open **Reply Rules** in settings and enable its local preview to configure:
+- **Group Greetings:** reliable startup and cleanup, improved popup and keyboard controls, and saving popup edits on close while retaining existing greeting data.
+- **Group Utilities:** exact-card notes, separate note/description switches, matching preview and generation context, corrected token limits and height comparisons, and protection against stale context.
+- **Group SendAs:** exact-card targeting, escaped character references, replacement of an existing `/sendas` prefix, and preservation of draft text, caret and selection.
+- **Bundle loading:** coordinated initialization, cleanup and cache handling across modules.
 
-- Exact-card aliases/trigger phrases and exclusions. Add each phrase in its own field; commas stay inside the phrase. Names and aliases use case-insensitive Unicode matching, with letter/number/mark/underscore boundaries and NFC normalization. A name embedded inside another word does not match. This does not infer whether someone is being addressed or discussed.
-- Multiple addressed speakers and an all-eligible phrase (default `everyone`). Both obey mute/eligibility, exclusions and limits. Turn limits include participants, total replies and replies per character; zero permits none. Each selected card appears once, so a per-character limit above one does not create repeated replies.
-- First-mention order or group order. Duplicate names or shared aliases are explained as ambiguous; use a unique alias to resolve them.
-- Optional session focus using **Focus selected card**. It clears on disable, mute/ineligibility, unresolved membership or a conversation change. It is not saved or restored on reload.
-- Fallback of **No automatic reply** (default), or the first eligible member. Selection priority is explicit choice, matching rules, focus, then fallback. An explicit or recognized request that is excluded/ambiguous does not unexpectedly fall through to another speaker.
+Existing settings and authored notes/greetings are retained. GCO's scene features are separate from the older Presence extension, which is not bundled.
 
-Use **Text to preview**, or **Copy draft to preview**, to see decisions without changing or sending the composer. Rule configuration applies to exact cards across groups and saves through the existing settings path. Unresolved card settings remain stored; they are not reassigned by name. Settings suggesting a known competing automatic router produce an advisory warning. Other extensions are never disabled.
+## Features
 
-The preview and automatic selection use the same rules. When current-scene controls are enabled, explicitly absent cards are excluded from Ask actions, routing, preview and focus.
+### Group Dynamics
 
-### Choosing the next responder
+Open **Group Dynamics** from the Extensions menu or Group Chat Overhaul settings. It follows the active conversation and starts closed. Select a member to edit notes, inspect context or use reply controls.
 
-On compatible hosts, select a card and choose **Choose next responder**. This applies once, to the next successfully saved ordinary user message. **Clear next responder** removes the choice. A failed send keeps the choice for a later deliberate send; it does not retry automatically. Changing chats clears it. Write as, greetings, Continue, Regenerate and swipes do not trigger a routed turn. Using a native manual action or sending a slash command ends routing and clears its pending choice.
+On desktop, native **Moving UI** enables dragging and resizing. **Reset position** restores this panel's placement. Narrow screens use a scrolling panel within the viewport.
+
+### Card-specific notes
+
+Notes belong to the exact character card, so duplicate names remain separate. Older name-based notes that cannot be matched safely remain available for explicit assignment.
+
+Notes and scene choices save through SillyBunny settings. Pending edits can recover in the same browser tab after a reload or server restart. Wait for save confirmation before closing the tab or changing devices.
+
+### Context preview
+
+Preview the extra context GCO would supply for the selected member, including shared notes, descriptions, height comparisons and reasons for omissions. With scene memory enabled, it also reports hidden-message counts. This preview covers GCO's contributions, not the complete model prompt.
+
+### Write as and Ask to respond
+
+- **Write as** prepares a `/sendas` draft. Repeated use replaces the prefix and keeps the draft; sending is a separate action.
+- **Ask to respond / Ask now** requests one generated reply from the selected card. The composer must contain no text or pending attachment, and generation must be idle. An explicitly requested muted member can reply without changing its automatic-reply setting.
+
+**Clear request** asks compatible hosts to cancel GCO's request. Native **Stop** remains available. Controls stay locked until the underlying request finishes; uncertain results do not trigger retries.
+
+### Choose next responder
+
+Choose who answers the next ordinary user message. On supported SillyBunny versions, this uses the same selection as the native speaker bar; changing either updates the other. **Clear next responder** clears the selection. A failed send keeps the choice for your next deliberate send.
+
+This can work independently of automatic routing. Hosts without native speaker selection need compatible routing support. Muted, absent or rule-excluded cards and zero reply limits prevent selection.
+
+### Current Members
+
+**Current Members** opens SillyBunny's native roster, with automatic-reply toggles, Model Override and member-management buttons. **Group Dynamics** contains GCO's notes, scene settings and preview. The windows have separate shortcuts.
+
+## Optional Features
+
+### Shared context
+
+In **Group Chat Overhaul**, toggle **Share group notes** and **Share character descriptions and height context** independently. Both default to on. Height comparisons use measurements found in descriptions.
+
+Set insertion depth, description token limits, the stopping character and the maximum descriptions shared (`-1` means all). **Include In WI**, off by default, lets shared context participate in World Info matching. Description limits do not limit notes.
+
+The macros `{{char_list}}` and `{{char_list_all}}` list available members with descriptions, excluding or including the current speaker respectively.
+
+### Action-row shortcuts
+
+Toggle **Show Group Dynamics in the action row** and **Show Current Members in the action row** separately. Dynamics defaults off; Current Members defaults on. Shortcuts appear beside Guided Impersonate and Flush Guides when that row is available.
+
+### Compact responder picker
+
+Enable **Show compact responder picker** to place responder controls near the composer. Cards are identified by name and filename. This is off by default and shares the same request handling as Group Dynamics.
+
+### Reply Rules and focus
+
+Enable **Reply Rules** to configure exact-card aliases, individual trigger phrases, exclusions, an all-eligible phrase such as `everyone`, speaker order and reply limits. Matching is literal and case-insensitive; it does not infer intent. Use unique aliases for duplicate names.
+
+**Text to preview** and **Copy draft to preview** explain selections without sending anything. Optional **Focus selected card** provides session-only focus; it clears when the conversation changes or the card becomes ineligible. Rules default off, with no automatic fallback. Each selected card appears once per routed turn.
 
 ### Automatic routing
 
-Enable Reply Rules, then choose **Enable automatic routing for this chat**. It starts off on reload and lasts only in the current open conversation. A staged responder takes precedence over matching rules, session focus and fallback. Speaker eligibility, exclusions and limits still apply.
+With Reply Rules enabled, choose **Enable automatic routing for this chat**. This requires compatible host support and starts off after reload. The selection order is explicit choice, matching rules, focus, then the configured fallback.
 
-While routing is enabled, the extension owns ordinary-turn selection. It does not rewrite the saved native strategy. Changing the native strategy, selecting a speaker in the native controls, using Ask now, or leaving the chat ends that ownership. **Clear request** cancels the turn and turns routing off. A detected competing router prevents activation. Each selected speaker runs in order only after the host acknowledges the submitted user message and each preceding reply. Stop, timeout, failed saves, changed conversation state or uncertain completion end the turn without retrying or advancing another reply.
+Replies run in order after confirmed saves. Native speaker/strategy changes, manual actions or chat switches end automatic routing. Stop, failed saves, timeouts or uncertain completion end the current turn without retries. **Clear request** also turns automatic routing off. A detected competing router prevents activation. Routed replies require tool calling to be off and suppress auto-continue and auto-swipe.
 
-Routed replies require tool calling to be off. They suppress automatic continuation and auto-swipe so those features cannot add replies beyond the configured limit. Manual native generation keeps its usual behavior.
+### Current scene
 
-These controls are unavailable when the host lacks the required support. Manual Ask now and rule preview continue to work there.
+In **Group Dynamics → Current scene**, enable scene controls and set each member to **Present**, **Absent**, **Remotely connected** or **Unspecified**. The feature defaults off; new cards start unspecified.
 
-## Current scene
+Absent members are excluded from GCO's Ask actions, Reply Rules and focus. Scene choices do not change group membership or mute settings. Turning controls off keeps saved choices and removes these restrictions. Native reply selection can act independently when GCO does not own routing.
 
-Open **Group Dynamics**, select a card, expand **Current scene**, and enable its controls. Each card starts **unspecified** until you choose a state:
-
-| State | Meaning for this extension |
-| --- | --- |
-| Unspecified | No current-scene restriction is assigned. It is not evidence of presence. |
-| Present | The card is marked as being in the current scene. |
-| Absent | The card is excluded from this extension's Ask actions, Reply Rules preview and focus. |
-| Remotely connected | The card is marked as connected to the scene and remains reachable by this extension. |
-
-Use **Arrive**, **Depart**, **Connect remotely**, **Disconnect** or **Set absent** as appropriate. **Clear scene state** returns the selected card to unspecified. Turning the feature off removes its restrictions while keeping saved choices.
-
-Scene choices and shared notes stay in SillyBunny's saved settings. Pending edits are also kept in the current browser tab so they can recover after a reload or server restart. Group Dynamics shows whether the server has confirmed the save and offers **Retry saving** if needed. Wait for confirmation before closing the tab or switching devices. Recovery respects newer saved changes; conflicting edits remain available through **Download recovery copy**. Scene choices still belong to their original conversation. A different chat, including a branch or renamed chat, starts unspecified. With scene memory on, members recorded as absent at its newest message start absent instead, with **Undo**.
-
-These controls do not add or remove group members, change mute settings or take over native routing. A quiet member can still be present; selecting a speaker does not change scene state. Without scene memory, the controls record current choices only and do not change what any character sees.
-
-Choices save in extension settings under the exact conversation and character-card identity, not in the transcript. Duplicate names remain separate. State for missing or changed card identities is kept without reassignment by name. Unsupported saved scene formats are preserved and editing is gated.
+Choices belong to the exact card and conversation. A new, branched or renamed chat starts unspecified, except that scene memory can restore absence recorded at its newest message, with Undo.
 
 ### Scene memory
 
-Enable current-scene controls, then switch on **Scene memory** and, if wanted, **Automatic presence**. Both are off by default.
+Enable current-scene controls, then **Scene memory**. It defaults off and requires compatible host support. New messages record who was absent; those messages are hidden from that member's reply context. Members added mid-chat also miss earlier messages, except their own.
 
-- **Scene memory**: each new message records who was absent. When a member replies, messages they missed are hidden from their prompt. Members added to the group mid-chat also do not see messages from before they joined, apart from their own. A notice lists them with **Undo**.
-- **Automatic presence**: marks members present or absent from simple English lines such as "Alice walks in." or "Bob heads out." in your messages and replies. Changes in your message apply before anyone replies. Changes in replies wait until the round of replies ends. Applied changes show a notice with **Undo**, and **Latest automatic changes** lists each member's latest change with **Undo**.
-- **Knows everything**: the selected member, such as a narrator, sees every message in every chat.
-- **Show earlier messages**, like **Undo** on the join notice, lets a member added mid-chat see messages from before they joined. Neither can be reversed, even by removing and re-adding the card.
-- **Context preview** shows how many messages are hidden from the selected member, and why.
+- **Knows everything** lets the selected card see all messages across chats and can be toggled off again.
+- **Show earlier messages**, or **Undo** on the join notice, permanently removes that member's earlier-message restriction. Removing and re-adding the card does not restore it.
+- Messages written before memory was enabled, or while it was off, have no absence record; later-join restrictions still apply.
+- After renaming a card, its missed messages remain hidden only in chats where it has written a message.
+- Hidden messages are excluded from World Info keyword matching for that reply. Summaries, lorebook entries, macros and other extensions can still reveal missed information.
+- If Vocalia's history filter is enabled, GCO leaves filtering to Vocalia.
 
-Limits:
+Scene memory stores small records in chat data alongside the host's normal saves.
 
-- Messages from before scene memory was on, or written while it was off, are hidden only from members added later.
-- After you rename a card, messages it missed stay hidden from it only in chats where it has written a message.
-- Hidden messages do not count for lorebook (World Info) keyword matching in that reply.
-- Only messages are hidden. Summaries, lorebook entries, macros and other extensions can still reveal what a member missed.
-- If Vocalia's history filter is on, GCO leaves hiding to Vocalia.
+### Automatic presence
 
-## Optional scene suggestions
+With scene memory enabled, toggle **Automatic presence**. It defaults off and detects simple English arrival/departure lines such as “Alice walks in” or “Bob heads out.”
 
-First enable current-scene controls in a group. In **Group Utils → Scene suggestions (optional)**, enable suggestions and explicitly choose a **saved connection profile**. This does not switch your active chat connection. OpenAI, other chat providers, custom OpenAI-compatible endpoints such as NanoGPT, and local text-completion profiles use SillyBunny's own request service. An OpenAI key is not required for other providers.
+Changes in user messages apply before replies; changes in replies wait until the round ends. Notices and **Latest automatic changes** provide **Undo**. This uses text rules, not a model request.
 
-The selected profile supplies its connection address, credentials, proxy and custom request settings through the host. Model and key requirements depend on the provider. Suggestions skip chat generation and instruct presets and send their own scene prompt. Advanced custom request settings retain SillyBunny's normal behavior. If a connection fails, check that saved profile's address, model and credentials; there is no automatic profile fallback.
+### Scene suggestions
 
-Saved profiles remain visible even when temporarily unavailable. Legacy KoboldAI, Horde and NovelAI connection types are not supported by SillyBunny's background profile service; selecting one explains the limitation. KoboldCpp text-completion profiles are supported.
+Enable **Scene suggestions** in Group Chat Overhaul and explicitly select a supported saved connection profile. Current-scene controls must also be on. Suggestions default off and use SillyBunny's chat/text completion service without switching the active chat connection.
 
-Enter a description in **Describe the current scene**, then choose **Suggest scene changes**. Each request uses that connection and may cost money and take time. The extension builds its prompt from fixed response-format instructions, the description you enter, exact card filenames, card names and current scene states. It does not add chat history, shared notes, character descriptions or the composer draft. Your profile's custom request settings also apply. The entered description and returned suggestions are not saved by this extension.
+Enter a scene description and choose **Suggest scene changes**. Each request may incur provider costs. GCO sends the entered description, card names/filenames and current scene states; it excludes chat history, notes and the composer draft. The profile's custom request settings also apply.
 
-The response must contain at most three proposals, unique known cards, valid current-to-new states, and no unsupported fields. Invalid responses are rejected. Review each explanation; a model suggestion can be wrong. **Apply change for [card]** applies only that proposal and clears the entire batch. Request fresh suggestions to consider another change. Nothing is applied automatically.
+Review up to three proposals. **Apply change** applies one proposal and clears the batch. Nothing applies automatically, and GCO does not save the entered description or returned proposals. Automatic speaker/turn suggestions are unavailable.
 
-Suggestions share the same outstanding-request lock as manual replies. **Stop / clear suggestions** requests cancellation and clears proposals. The lock remains until the underlying request settles, including after a timeout or cancellation. A changed chat, history, card identity, scene, connection profile, or disabled feature invalidates stale work; late results cannot apply to another conversation. Errors, timeouts and ambiguous outcomes do not trigger retries.
+### Prose styling
 
-This feature suggests current-scene changes only. Automatic speaker/turn suggestions remain gated, and ordinary replies do not require a suggestion request.
+Enable **Style existing quotes and action emphasis in group chats** for stronger quotes and a subtle theme-colored emphasis background. It defaults off, uses the host's existing formatting and excludes code. Message text stays unchanged; no model call or special reply format is needed.
 
-## Optional prose styling
+## Troubleshooting
 
-Enable **Style existing quotes and action emphasis in group chats** in Group Utils settings for slightly stronger quotes and a subtle theme-colored emphasis background. It applies only while a group conversation is active and restores native appearance when disabled.
+| Problem | Check |
+| --- | --- |
+| Missing or duplicate controls | Reload or hard refresh after installation/update. Disable duplicate standalone copies of the bundled extensions. |
+| Ask is unavailable | Send or clear the draft and attachment, wait for the current request, and check whether the card is marked absent. Use native Stop for running generation. |
+| Next responder or automatic routing is unavailable | These have separate host requirements. Read the control's explanation; automatic routing also checks for competing routers. Manual Ask and rule preview remain available. |
+| Notes or descriptions are missing | Check the independent sharing switches and Context preview. Confirm the selected card and assign any unresolved older note explicitly. |
+| A save is pending or failed | Keep the tab open and use **Retry saving**. If offered, use **Download recovery copy** to retain conflicting edits. |
+| Scene memory or automatic presence is unavailable | Enable current-scene controls and check the host-support explanation. Presence also requires scene memory. |
+| A member still knows something it missed | Review the Scene memory limits, **Knows everything**, earlier-message reveals and other context sources. Check whether Vocalia is handling filtering. |
+| Scene suggestions fail | Check the selected saved profile's address, model and credentials. Legacy KoboldAI, Horde and NovelAI profiles are unsupported by the background service; KoboldCpp text-completion profiles are supported. There is no automatic profile fallback. |
+| Current Members will not open | Open a group conversation and finish or leave any new-character or new-group form. |
+| Group Dynamics is misplaced | Use **Reset position**. Dragging/resizing requires native Moving UI on desktop. |
 
-Styling follows the host's existing `<q>` and `<em>` elements; it does not semantically identify dialogue or actions, parse structured replies, or rewrite message HTML or text. Code blocks and inline code are excluded. Ordinary prose remains usable with the feature off, and no model call or structured-response format is required.
+## Credits, License & Inspirations
 
-## Credits
+Bundled work and contributors:
 
-All credit for the original extension ideas and implementations belongs to their upstream authors and contributors:
+- [Extension-GroupGreetings](https://github.com/SillyTavern/Extension-GroupGreetings) — Cohee and contributors.
+- [st-group-utils](https://github.com/DummyTBanana/st-group-utils) — city-unit / Ubunifu and contributors.
+- [SillyTavern GroupSendAs](https://github.com/SillyTavern/SillyTavern-GroupSendAs) — Cohee, Saref111 and contributors.
 
-- [Cohee](https://github.com/Cohee1207)
-- ~~[leandrojofre](https://github.com/leandrojofre)~~
-- [city-unit](https://github.com/city-unit)
+The repository's [LICENSE](LICENSE) contains GPL-3.0 terms. Group Greetings and GroupSendAs declare AGPL-3.0; st-group-utils declares CC BY-SA without specifying a version. Bundled upstream code retains its original license notices and terms.
 
-This bundle adapts their work for a SillyBunny-focused workflow. Original repositories are linked in the **Bundled Extensions** section above.
+Inspirations for GCO's scene, responder and context features:
 
-## License
+- [SillyTavern Presence](https://github.com/leandrojofre/SillyTavern-Presence)
+- [STGroupResponderSelector](https://github.com/thexyzzyone/STGroupResponderSelector)
+- [Natural-Extended](https://github.com/Spiriax/Natural-Extended)
+- [Aspect: Vocalia](https://github.com/Vectricity/st-aspect-vocalia)
 
-This bundle contains code from upstream projects containing licenses AGPL-3.0 and CC BY-SA.
+These inspiration projects are not bundled with GCO.
