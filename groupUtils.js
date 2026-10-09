@@ -7,8 +7,7 @@ const dependencyUrl = path => {
     if (token) url.searchParams.set('v', token);
     return url.href;
 };
-const [{ createAssetUrl }, store, { buildContext }, { createHostAdapter }, { createCleanupScope }, { createSceneStore }, { createSettingsPersistence },
-    { createSceneRecorder }] = await Promise.all([
+const [{ createAssetUrl }, store, { buildContext }, { createHostAdapter }, { createCleanupScope }, { createSceneStore }, { createSettingsPersistence }] = await Promise.all([
     import(dependencyUrl('./src/assets.js')),
     import(dependencyUrl('./src/settings.js')),
     import(dependencyUrl('./src/context-builder.js')),
@@ -16,7 +15,6 @@ const [{ createAssetUrl }, store, { buildContext }, { createHostAdapter }, { cre
     import(dependencyUrl('./src/lifecycle.js')),
     import(dependencyUrl('./src/scene-state.js')),
     import(dependencyUrl('./src/settings-persistence.js')),
-    import(dependencyUrl('./src/scene-recorder.js')),
 ]);
 export const assetUrl = createAssetUrl(import.meta.url);
 const host = createHostAdapter({ getContext });
@@ -25,7 +23,6 @@ let promptRevision = 0;
 let disabled = false;
 let heightModule;
 let scene;
-let sceneMemory;
 let persistence;
 const options = (context = getContext()) => store.readSettings(context.extensionSettings);
 
@@ -96,7 +93,7 @@ export async function buildPreview(speakerAvatar) {
         || signature !== snapshotSignature(getContext())) {
         return { ...emptyPreview(), stale: true, warnings: ['The conversation changed. Refresh the preview.'] };
     }
-    return result.speaker && sceneMemory ? { ...result, memory: sceneMemory.hiddenFor(result.speaker.avatar) } : result;
+    return result;
 }
 
 export async function rearrangeChat(_chat, _contextSize, _abort, generationType = 'normal') {
@@ -105,14 +102,6 @@ export async function rearrangeChat(_chat, _contextSize, _abort, generationType 
         const context = getContext();
         context.setExtensionPrompt(promptKey, '', 1, 0);
         if (disabled || !host.activeConversation(context)) return;
-        // Blanks lines the speaker did not witness; it runs before the staleness returns below so they never skip it.
-        try {
-            if (sceneMemory && store.memoryOn(options(context))) {
-                sceneMemory.filter(_chat, generationType, generatingCharacter(context, resolveMembers(context))?.avatar);
-            }
-        } catch (error) {
-            console.warn('[Group Utilities] Scene memory filter failed', error);
-        }
         const signature = snapshotSignature(context, generationType);
         const chat = context.chat;
         const settings = options(context);
@@ -163,8 +152,7 @@ const settingsFacade = {
         const context = getContext();
         const before = persistence?.capture();
         const stored = store.ensureSettings(context.extensionSettings);
-        const next = store.withMemoryToken(options(context), patch, { now: Date.now(), groups: host.groupRosters() });
-        for (const [key, value] of Object.entries(next)) {
+        for (const [key, value] of Object.entries(patch)) {
             if (Object.hasOwn(store.defaults, key)) stored[key] = value;
         }
         if (!persistence?.record(before)) context.saveSettingsDebounced();
@@ -178,12 +166,6 @@ const settingsFacade = {
         return () => settingsListeners.delete(listener);
     },
 };
-
-// A turn-on token must exist exactly while scene memory is on, also after a reload replays older settings.
-function alignToken() {
-    const patch = store.alignMemoryToken(options(), { now: Date.now(), groups: host.groupRosters() });
-    if (patch) settingsFacade.update(patch);
-}
 
 function editorCharacter(context) {
     const form = document.getElementById('form_create');
@@ -219,13 +201,7 @@ export async function initialize() {
             context.eventSource.on(event, handler);
         };
         try {
-            on(context.eventTypes.EXTENSION_DISABLED, name => {
-                if (!ownExtension(name)) return;
-                // Re-enabling starts scene memory afresh, so lines written while disabled are never judged by a stale token.
-                try { settingsFacade.update({ scene_history_since: null, scene_history_founders: null }); }
-                catch (error) { console.warn('[Group Utilities] Scene memory token could not be cleared', error); }
-                cleanup();
-            });
+            on(context.eventTypes.EXTENSION_DISABLED, name => { if (ownExtension(name)) cleanup(); });
             const isDisabled = () => (getContext().extensionSettings.disabledExtensions ?? []).some(ownExtension);
             if (isDisabled()) throw new Error('Group Utilities is disabled');
             const [noteHtml, settingsHtml] = await Promise.all([
@@ -276,7 +252,6 @@ export async function initialize() {
                 }
             });
             ownedPersistence.restore();
-            alignToken();
             on(context.eventTypes.SETTINGS_LOADED, () => { void ownedPersistence.flush(); });
             const retryPendingSave = () => { void ownedPersistence.flush(); };
             window.addEventListener?.('online', retryPendingSave);
@@ -342,11 +317,7 @@ export async function initialize() {
             on(context.eventTypes.CHARACTER_EDITOR_OPENED, refreshNote);
             on(context.eventTypes.CHARACTER_EDITED, () => { invalidatePrompt(); refreshNote(); });
             on(context.eventTypes.GROUP_UPDATED, invalidatePrompt);
-            on(context.eventTypes.SETTINGS_UPDATED, () => { alignToken(); settingsChanged(); refreshNote(); });
-            on(context.eventTypes.CHARACTER_RENAMED, (from, to) => {
-                const patch = store.renameMemorySettings(options(), from, to);
-                if (patch) settingsFacade.update(patch);
-            });
+            on(context.eventTypes.SETTINGS_UPDATED, () => { settingsChanged(); refreshNote(); });
             const previousInterceptor = window.groupUtils_generationInterceptor;
             scope.add(() => {
                 if (window.groupUtils_generationInterceptor === rearrangeChat) {
@@ -360,25 +331,8 @@ export async function initialize() {
             scene = createSceneStore({ host, settings: settingsFacade });
             const ownedScene = scene;
             scope.add(() => { ownedScene.destroy(); if (scene === ownedScene) scene = undefined; });
-            // The recorder reads the host's generating state, which this loads.
-            await host.prepareSuggestionSupport();
-            if (scope.closed || isDisabled()) throw new Error('Group Utilities initialization cancelled');
-            sceneMemory = createSceneRecorder({ host, settings: settingsFacade, scene });
-            const ownedMemory = sceneMemory;
-            scope.add(() => { ownedMemory.destroy(); if (sceneMemory === ownedMemory) sceneMemory = undefined; });
-            // SillyBunny asks before merging retained companion notes; hosts without the event merge as before.
-            on(context.eventTypes.GENERATION_HIDE_MESSAGES, request => {
-                try {
-                    const current = getContext();
-                    if (disabled || sceneMemory !== ownedMemory || !host.activeConversation(current)) return;
-                    if (!store.memoryOn(options(current))) return;
-                    ownedMemory.declare(request, generatingCharacter(current, resolveMembers(current))?.avatar);
-                } catch (error) {
-                    console.warn('[Group Utilities] Scene memory hide request failed', error);
-                }
-            });
             disabled = false;
-            state.groupUtilsApi = { host, settings: settingsFacade, scene, sceneMemory, buildPreview, getNote, setNote };
+            state.groupUtilsApi = { host, settings: settingsFacade, scene, buildPreview, getNote, setNote };
             state.groupUtilsCleanup = cleanup;
             state.groupUtilsLoaded = true;
             return cleanup;
