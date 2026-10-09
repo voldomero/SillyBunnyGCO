@@ -1,17 +1,4 @@
-// Siblings load with this module's asset token, as groupUtils.js does, so a GCO update never mixes cached files.
-const sibling = path => {
-    const url = new URL(path, import.meta.url);
-    const token = new URL(import.meta.url).searchParams.get('v') ?? globalThis.window?.SillyBunnyGroupUtilities?.assetToken;
-    if (token) url.searchParams.set('v', token);
-    return url.href;
-};
-const { timeOf: readTime } = await import(sibling('./scene-roster.js'));
-
 const panelRegistry = new WeakMap();
-const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value);
-const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', '\'': '&#39;',
-})[character]);
 const geometryProperties = ['top', 'right', 'bottom', 'left', 'width', 'height', 'margin'];
 
 export function getActiveConversation(context) {
@@ -126,7 +113,7 @@ export function createHostAdapter({
         const current = context();
         const source = current.eventSource;
         const events = [...new Set(['CHAT_CHANGED', 'GROUP_UPDATED', 'CHARACTER_EDITED', 'SETTINGS_UPDATED',
-            'GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED', 'GROUP_SPEAKER_SELECTION_CHANGED']
+            'GENERATION_STARTED', 'GENERATION_ENDED', 'GENERATION_STOPPED']
             .map(name => current.eventTypes?.[name]).filter(Boolean))];
         const registered = [];
         const composerChanged = event => {
@@ -180,87 +167,6 @@ export function createHostAdapter({
         return cleanup;
     }
 
-    // Unlike onTurnEvent, handlers return their result so the host's emitter can await them.
-    function onHostEvents(names, callback) {
-        const current = context();
-        const registered = [];
-        const cleanup = () => {
-            for (const [event, handler] of registered.splice(0)) {
-                if (current.eventSource?.removeListener) current.eventSource.removeListener(event, handler);
-                else current.eventSource?.off?.(event, handler);
-            }
-        };
-        try {
-            for (const name of new Set(names)) {
-                const event = current.eventTypes?.[name];
-                if (!event) continue;
-                const handler = (...args) => callback(name, ...args);
-                registered.push([event, handler]);
-                current.eventSource?.on?.(event, handler);
-            }
-        } catch (error) { cleanup(); throw error; }
-        return cleanup;
-    }
-
-    function ignoreSymbol() {
-        const ignore = context().symbols?.ignore;
-        return typeof ignore === 'symbol' ? ignore : undefined;
-    }
-
-    function memoryCapabilities() {
-        const types = context().eventTypes ?? {};
-        const history = Boolean(ignoreSymbol());
-        return { history, automatic: history && Boolean(types.GROUP_WRAPPER_STARTED && types.GROUP_WRAPPER_FINISHED) };
-    }
-
-    // Vocalia's own history filter would hide lines twice; this one setting is all GCO reads from it.
-    function historyCompetitor() {
-        if (!routingCapabilities().competitors.includes('Aspect: Vocalia')) return false;
-        const registry = context().extensionSettings;
-        const vocalia = registry?.aspect_vocalia?.enabled === true ? registry.aspect_vocalia : registry?.group_speaker_router;
-        return vocalia?.occludeUnwitnessedHistory !== false;
-    }
-
-    function memberIds() {
-        const members = getActiveConversation(context())?.group?.members;
-        if (!Array.isArray(members)) return [];
-        return [...new Set(members.filter(avatar => typeof avatar === 'string' && avatar))];
-    }
-
-    function cardAvatars() {
-        const characters = context().characters;
-        return new Set((Array.isArray(characters) ? characters : [])
-            .map(character => character?.avatar).filter(avatar => typeof avatar === 'string' && avatar));
-    }
-
-    function groupRosters() {
-        const groups = context().groups;
-        return (Array.isArray(groups) ? groups : []).filter(isRecord).map(group => ({ id: group.id, members: group.members }));
-    }
-
-    async function saveChat(options = {}) {
-        const save = context().saveChat;
-        return typeof save === 'function' ? save(options) : undefined;
-    }
-
-    function toast({ level = 'info', text, detail, actionLabel, onAction, timeOut = 8000 } = {}) {
-        const toastr = view?.toastr ?? globalThis.toastr;
-        const show = typeof toastr?.[level] === 'function' ? toastr[level] : toastr?.info;
-        if (typeof show !== 'function') return;
-        let acted = false;
-        const action = actionLabel && typeof onAction === 'function'
-            ? ` <button type="button" class="sbu-toast-action menu_button">${escapeHtml(actionLabel)}</button>` : '';
-        const extra = detail ? ` <span class="sbu-toast-detail">${escapeHtml(detail)}</span>` : '';
-        show.call(toastr, `${escapeHtml(text)}${extra}${action}`, '', {
-            escapeHtml: false, timeOut, extendedTimeOut: timeOut, tapToDismiss: !action, closeButton: Boolean(action),
-            onclick: event => {
-                if (acted || !action || !event?.target?.closest?.('.sbu-toast-action')) return;
-                acted = true;
-                onAction();
-            },
-        });
-    }
-
     function routingCapabilities() {
         const disabled = context().extensionSettings?.disabledExtensions ?? [];
         const registry = context().extensionSettings;
@@ -273,44 +179,13 @@ export function createHostAdapter({
             .map(([name]) => name);
         const routing = context().groupTurnRouting;
         const supported = routing?.version === 1 && typeof routing.acquire === 'function';
-        const nativeSpeaker = Boolean(speakerPickApi(context()));
         return {
-            staged: supported, automatic: supported, nativeSpeaker,
+            staged: supported, automatic: supported,
             reason: supported
                 ? 'Routing is available for this conversation. Enable it explicitly; native strategy changes end this session.'
-                : nativeSpeaker
-                    ? 'This host has no verified handoff before native speaker selection or owned completion contract. Automatic routing is unavailable.'
-                    : 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
+                : 'This host has no verified handoff before native speaker selection or owned completion contract. Choose next responder and automatic routing are unavailable.',
             competitors,
         };
-    }
-
-    // SillyBunny's speaker bar pick decides who answers the next message; Choose next responder drives it.
-    function speakerPickApi(current) {
-        return typeof current.getSelectedGroupSpeakerAvatar === 'function'
-            && typeof current.setSelectedGroupSpeakerAvatar === 'function' ? current : null;
-    }
-
-    const pickableMember = (current, avatar) => resolveActiveMembers(current)
-        .some(member => member.avatar === avatar && !member.disabled);
-
-    function getNextSpeaker() {
-        const current = context();
-        try {
-            const avatar = speakerPickApi(current)?.getSelectedGroupSpeakerAvatar();
-            return avatar && pickableMember(current, avatar) ? avatar : undefined;
-        } catch { return undefined; }
-    }
-
-    function setNextSpeaker(avatar, expectedChatKey) {
-        const current = context();
-        const active = getActiveConversation(current);
-        // Native group lookup is strict, as in canAskToRespond.
-        if (!speakerPickApi(current) || !active || active.group.id !== current.groupId
-            || (expectedChatKey !== undefined && expectedChatKey !== active.key)) return false;
-        if (avatar !== '' && !pickableMember(current, avatar)) return false;
-        try { return current.setSelectedGroupSpeakerAvatar(avatar) === true; }
-        catch { return false; }
     }
 
     function registerButton({ id, label, onClick, icon = 'fa-users' }, selector, shortcut) {
@@ -562,20 +437,7 @@ export function createHostAdapter({
         nativeDescriptionContext: (current = context(), speakerAvatar, generationType = 'normal') => getNativeDescriptionContext(current, speakerAvatar, generationType),
         onContextChanged,
         onTurnEvent,
-        onHostEvents,
-        saveChat,
-        ignoreSymbol,
-        memoryCapabilities,
-        historyCompetitor,
-        chatMetadata: () => isRecord(context().chatMetadata) ? context().chatMetadata : undefined,
-        memberIds,
-        cardAvatars,
-        groupRosters,
-        timeOf: value => readTime(value, context().timestampToMoment),
-        toast,
         routingCapabilities,
-        getNextSpeaker,
-        setNextSpeaker,
         registerAction: options => registerButton(options, '#extensionsMenu', false),
         registerShortcut: options => registerButton(options, '#gg-action-button-container .gg-regular-buttons-container', true),
         isCurrentMembersOpen,
